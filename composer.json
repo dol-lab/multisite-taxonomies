@@ -13,7 +13,7 @@
       "url": "https://github.com/WordPress-Coding-Standards/WordPress-Coding-Standards"
   }],
   "require": {
-  	"composer/installers": "~1.0"
+  	"composer/installers": "~2.0"
   },
   "require-dev": {
     "wp-coding-standards/wpcs": "dev-master"
