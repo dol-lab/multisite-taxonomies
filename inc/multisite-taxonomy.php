@@ -200,7 +200,7 @@ function is_multisite_taxonomy_hierarchical( $multisite_taxonomy ) {
  *     @type callable      $update_count_callback Works much like a hook, in that it will be called when the count is
  *                                                updated. Default update_multisite_term_count().
  * }
- * @return WP_Error|Multisite_Taxonomy WP_Error, if errors.
+ * @return Multisite_Taxonomy|WP_Error The registered taxonomy object on success, WP_Error object on failure.
  */
 function register_multisite_taxonomy( $multisite_taxonomy, $object_type, $args = array() ) {
 	global $multisite_taxonomies;
@@ -1440,12 +1440,13 @@ function delete_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
 	$deleted_multisite_term = get_multisite_term( $multisite_term, $multisite_taxonomy );
 
 	$object_ids = (array) $wpdb->get_col( $wpdb->prepare( "SELECT object_id FROM $wpdb->multisite_term_relationships WHERE multisite_term_multisite_taxonomy_id = %d", $mtmt_id ) );
-
+	
 	foreach ( $object_ids as $object_id ) {
+		
 		$multisite_terms = get_object_multisite_terms(
 			$object_id,
 			$multisite_taxonomy,
-			$blog_id,
+			0,
 			array(
 				'fields'  => 'ids',
 				'orderby' => 'none',
@@ -2989,8 +2990,8 @@ function _pad_multisite_term_counts( &$multisite_terms, $multisite_taxonomy ) {
 
 	// Get the object and multisite term ids and stick them in a lookup table.
 	$multi_tax_obj = get_multisite_taxonomy( $multisite_taxonomy );
-	$object_types  = esc_sql( $multi_tax_obj->object_type );
-	$results       = $wpdb->get_results( "SELECT object_id, multisite_term_multisite_taxonomy_id FROM $wpdb->multisite_term_relationships INNER JOIN $wpdb->posts ON object_id = ID WHERE multisite_term_multisite_taxonomy_id IN (" . implode( ',', array_keys( $multisite_term_ids ) ) . ") AND post_type IN ( '" . implode( "', '", $object_types ) . "' ) AND post_status = 'publish'" );
+	$object_type  = esc_sql( $multi_tax_obj->object_type );
+	$results       = $wpdb->get_results( "SELECT object_id, multisite_term_multisite_taxonomy_id FROM $wpdb->multisite_term_relationships INNER JOIN $wpdb->posts ON object_id = ID WHERE multisite_term_multisite_taxonomy_id IN (" . implode( ',', array_keys( $multisite_term_ids ) ) . ") AND post_type IN ( '" . implode( "', '", $object_type ) . "' ) AND post_status = 'publish'" );
 	foreach ( $results as $row ) {
 		$id = $multisite_term_ids[ $row->multisite_term_multisite_taxonomy_id ];
 		$multisite_term_items[ $id ][ $row->object_id ] = isset( $multisite_term_items[ $id ][ $row->object_id ] ) ? ++$multisite_term_items[ $id ][ $row->object_id ] : 1;
@@ -3563,13 +3564,14 @@ function create_multisite_term( $multisite_term_name, $multisite_taxonomy ) {
  * @since 3.1.0
  */
 function ajax_add_multisite_hierarchical_term() {
-	check_ajax_referer( 'add-multisite-' . $taxonomy->name, '_ajax_nonce-add-' . $taxonomy->name );
 	if ( isset( $_POST['action'] ) ) {
 		$action = sanitize_key( wp_unslash( $_POST['action'] ) );
 	}
 
 	$tax      = str_replace( 'add-multisite-hierarchical-term-', '', $action );
 	$taxonomy = get_multisite_taxonomy( $tax );
+
+	check_ajax_referer( 'add-multisite-' . $taxonomy->name, '_ajax_nonce-add-' . $taxonomy->name );
 
 	if ( ! current_user_can( $taxonomy->cap->edit_multisite_terms ) ) {
 		wp_die( -1 );

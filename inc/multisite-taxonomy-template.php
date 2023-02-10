@@ -34,7 +34,7 @@ function multisite_terms_checklist( $post_id = 0, $args = array() ) {
 		'popular_terms'        => false,
 		'selected_terms'       => false,
 		'walker'               => null,
-		'checked_ontop'        => true,
+		'checked_ontop'        => false,
 		'echo'                 => true,
 		'blog_id'              => get_current_blog_id(),
 	);

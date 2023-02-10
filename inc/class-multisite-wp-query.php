@@ -160,7 +160,7 @@ class Multisite_WP_Query {
 	 * @access public
 	 *
 	 * @param string|array $query_vars Array or URL query string of parameters.
-	 * @return array|int List of multisite terms, or number of multisite terms when 'count' is passed as a query var.
+	 * @return array|int|WP_Error List of multisite terms, or number of multisite terms when 'count' is passed as a query var.
 	 */
 	public function query( $query_vars ) {
 

@@ -2,6 +2,7 @@
 /**
  * Multisite Taxonomies Settings init class
  *
+ * @todo: User_Taxonomy_Admin
  * @package multitaxo
  */
 
@@ -17,7 +18,9 @@ class Multisite_Taxonomy_Meta_Box {
 	 */
 	public function __construct() {
 		// We enqueue both the frontend and admin styles and scripts.
-		add_action( 'add_meta_boxes', array( $this, 'add_multsite_taxonomy_meta_box' ), 10, 2 );
+		add_action( 'add_meta_boxes', array( $this, 'add_multisite_taxonomy_meta_box_post' ), 10, 2 );
+		add_action( 'show_user_profile', array( $this, 'add_multisite_taxonomy_meta_box_user' ), 10, 1 );
+		add_action( 'edit_user_profile', array( $this, 'add_multisite_taxonomy_meta_box_user' ), 10, 1 );
 
 		// Add the admin scripts to the posts pages.
 		add_action( 'admin_enqueue_scripts', array( $this, 'admin_enqueue_styles_and_scripts' ) );
@@ -27,7 +30,40 @@ class Multisite_Taxonomy_Meta_Box {
 		add_action( 'wp_ajax_ajax-get-multisite-term-cloud', array( $this, 'wp_ajax_get_multisite_term_cloud' ) );
 
 		// Save the post Box.
-		add_action( 'save_post', array( $this, 'save_multisite_taxonomy' ) );
+		add_action( 'save_post', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param ist post_id.
+		add_action( 'personal_options_update', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param is user_id.
+		add_action( 'edit_user_profile_update', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param is user_id.
+	}
+
+	/**
+	 * Display the metabox container if we should use it.
+	 *
+	 * @param WP_User $profile_user The WP Post type.
+	 *
+	 * @return void
+	 */
+	public function add_multisite_taxonomy_meta_box_user( WP_User $profile_user ) {
+		// global $wp_meta_boxes;
+		$taxonomies = (array) get_object_multisite_taxonomies( 'user' );
+		$this->admin_enqueue_styles_and_scripts( 'post-new.php' );
+
+		add_meta_box(
+			'multsite_taxonomy_meta_box',
+			esc_html__( 'Multisite Tags', 'multitaxo' ),
+			array( $this, 'multisite_taxonomy_meta_box_callback' ),
+			null,
+			'advanced',
+			'default',
+			array( $profile_user->ID )
+		);
+
+		do_action( 'before_add_multisite_taxonomy_meta_box_user', $profile_user );
+
+		// not sure, if surrounding things with the meta-box makes a lot of sense here...
+		do_meta_boxes( get_current_screen(), 'advanced', $profile_user->ID );
+
+		do_action( 'after_add_multisite_taxonomy_meta_box_user', $profile_user );
+
 	}
 
 	/**
@@ -38,7 +74,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @return void
 	 */
-	public function add_multsite_taxonomy_meta_box( $post_type, $post ) {
+	public function add_multisite_taxonomy_meta_box_post( $post_type, $post ) {
 		if ( count( (array) get_object_multisite_taxonomies( $post_type ) ) > 0 && ( current_user_can( 'assign_multisite_terms' ) ) ) {
 			add_meta_box( 'multsite_taxonomy_meta_box', esc_html__( 'Multisite Tags', 'multitaxo' ), array( $this, 'multisite_taxonomy_meta_box_callback' ), null, 'advanced', 'default', array( $post, $post_type ) );
 		}
@@ -47,13 +83,16 @@ class Multisite_Taxonomy_Meta_Box {
 	/**
 	 * Enqueue scripts and styles for our metabox.
 	 *
+	 * @todo: add this to the footer, if the metabox is added?
+	 *
 	 * @param string $hook page hook.
 	 *
 	 * @return void
 	 */
 	public function admin_enqueue_styles_and_scripts( $hook ) {
-		// We only need the scripts and styles on the edit/new post pages.
-		if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
+
+		if ( ! in_array( $hook, array( 'post.php', 'post-new.php', 'user-edit.php' ) ) ) {
+			// We only need the scripts and styles on the edit/new post pages.
 			return;
 		}
 
@@ -80,7 +119,7 @@ class Multisite_Taxonomy_Meta_Box {
 			)
 		);
 
-		wp_enqueue_script( 'hierarchical-multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-hierarchical-term-box.js', array( 'jquery-ui-tabs' ), MULTITAXO_VERSION, 1 );
+		wp_enqueue_script( 'hierarchical-multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-hierarchical-term-box.js', array( 'jquery-ui-tabs', 'wp-lists' ), MULTITAXO_VERSION, 1 );
 
 		wp_enqueue_style( 'multisite-taxonomy-meta-box', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), MULTITAXO_VERSION );
 	}
@@ -88,13 +127,21 @@ class Multisite_Taxonomy_Meta_Box {
 	/**
 	 * Display the meta box content.
 	 *
-	 * @param string  $post The WP Post type.
+	 * @param int     $obj_id an object_id like post_id.
 	 * @param WP_Post $metabox Post object.
 	 *
 	 * @return void
 	 */
-	public function multisite_taxonomy_meta_box_callback( $post, $metabox ) {
+	public function multisite_taxonomy_meta_box_callback( $obj, $metabox = '' ) {
 		$taxonomies = get_multisite_taxonomies( array(), 'objects' );
+
+		if ( is_int( $obj ) ) {
+			$obj_id = $obj;
+		} elseif ( is_a( $obj, 'WP_Post' ) ) {
+			$obj_id = $obj->ID;
+		} elseif ( is_a( $obj, 'WP_User' ) ) {
+			$obj_id = $obj->ID;
+		}
 
 		$tabs         = array();
 		$tab_contents = array();
@@ -139,9 +186,9 @@ class Multisite_Taxonomy_Meta_Box {
 
 			// Are we hierarchical-term or not?
 			if ( true === $tax->hierarchical ) {
-				$this->hierarchical_multisite_taxonomy_meta_box( $post, $args );
+				$this->hierarchical_multisite_taxonomy_meta_box( $obj_id, $args );
 			} else {
-				$this->multisite_taxonomy_meta_box( $post, $args );
+				$this->multisite_taxonomy_meta_box( $obj_id, $args );
 			}
 
 			?>
@@ -161,9 +208,9 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @todo Create taxonomy-agnostic wrapper for this.
 	 *
-	 * @param WP_Post $post Post object.
-	 * @param array   $args {
-	 *     Tags meta box arguments.
+	 * @param int   $obj_id
+	 * @param array $args {
+	 *   Tags meta box arguments.
 	 *
 	 *     @type string   $taxonomy Taxonomy corresponding.
 	 *     @type string   $title    Meta box title.
@@ -172,7 +219,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *     }
 	 * }
 	 */
-	public function multisite_taxonomy_meta_box( $post, $args ) {
+	public function multisite_taxonomy_meta_box( int $obj_id, $args ) {
 		if ( ! isset( $args['taxonomy'] ) ) {
 			return false;
 		}
@@ -181,9 +228,9 @@ class Multisite_Taxonomy_Meta_Box {
 		$r                     = wp_parse_args( $args, $defaults );
 		$tax_name              = esc_attr( $r['taxonomy'] );
 		$taxonomy              = get_multisite_taxonomy( $r['taxonomy'] );
-		$user_can_assign_terms = current_user_can( $taxonomy->cap->assign_multisite_terms );
+		$user_can_assign_terms = current_user_can( $taxonomy->cap['assign_multisite_terms'] );
 		$comma                 = _x( ',', 'tag delimiter', 'multitaxo' );
-		$terms_to_edit         = get_multisite_terms_to_edit( $post->ID, $tax_name );
+		$terms_to_edit         = get_multisite_terms_to_edit( $obj_id, $tax_name );
 
 		if ( ! is_string( $terms_to_edit ) ) {
 			$terms_to_edit = '';
@@ -224,9 +271,9 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @todo Create taxonomy-agnostic wrapper for this.
 	 *
-	 * @param WP_Post $post Post object.
-	 * @param array   $args {
-	 *     hierarchical-term meta box arguments.
+	 * @param int   $obj_id
+	 * @param array $args {
+	 *   hierarchical-term meta box arguments.
 	 *
 	 *     @type string   $id       Meta box 'id' attribute.
 	 *     @type string   $title    Meta box title.
@@ -238,7 +285,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *     }
 	 * }
 	 */
-	public function hierarchical_multisite_taxonomy_meta_box( $post, $args ) {
+	public function hierarchical_multisite_taxonomy_meta_box( $obj_id, $args ) {
 		if ( ! isset( $args['taxonomy'] ) ) {
 			return false;
 		}
@@ -247,6 +294,8 @@ class Multisite_Taxonomy_Meta_Box {
 		$r        = wp_parse_args( $args, $defaults );
 		$tax_name = esc_attr( $r['taxonomy'] );
 		$taxonomy = get_multisite_taxonomy( $r['taxonomy'] );
+
+		wp_nonce_field( 'multisite_taxonomy_meta_box', 'multisite_taxonomy_meta_box_nonce' );
 		?>
 		<div id="taxonomy-<?php echo esc_attr( $tax_name ); ?>" class="multisite-hierarchical-taxonomy-div">
 			<ul id="<?php echo esc_attr( $tax_name ); ?>-tabs" class="hierarchical-term-tabs">
@@ -267,7 +316,7 @@ class Multisite_Taxonomy_Meta_Box {
 				<ul id="<?php echo esc_attr( $tax_name ); ?>checklist" data-wp-lists="list:<?php echo esc_attr( $tax_name ); ?>" class="hierarchical-term-checklist form-no-clear">
 					<?php
 					multisite_terms_checklist(
-						$post->ID,
+						$obj_id,
 						array(
 							'taxonomy'      => $tax_name,
 							'popular_terms' => $popular_ids,
@@ -476,13 +525,18 @@ class Multisite_Taxonomy_Meta_Box {
 	}
 
 	/**
-	 * Save the custom Twaxonomy box.
+	 * Save the custom Taxonomy box.
+	 *
+	 * @todo: use for users, too.
+	 * @todo: better error-handling. - store in a transient, then show error after save?
+	 * @todo: is it right to use set_post_multisite_terms instead of set_object_multisite_terms here?
 	 *
 	 * @access public
-	 * @param integer $post_id The post id being edited.
+	 * @param int $obj_id The object id being edited (like post_id, blog_id, user_id).
 	 * @return mixed Void if successful or post_id if not.
 	 */
-	public function save_multisite_taxonomy( $post_id ) {
+	public function save_multisite_taxonomy( int $obj_id ) {
+
 		/*
 		* We need to verify this came from the our screen and with proper authorization,
 		* because save_post can be triggered at other times.
@@ -490,56 +544,70 @@ class Multisite_Taxonomy_Meta_Box {
 
 		// Check if our nonce is set.
 		if ( ! isset( $_POST['multisite_taxonomy_meta_box_nonce'] ) ) { // WPCS: input var okay.
-			return $post_id;
+			return $obj_id;
 		}
 
 		// Verify that the nonce is valid.
 		if ( ! wp_verify_nonce( sanitize_key( wp_unslash( $_POST['multisite_taxonomy_meta_box_nonce'] ) ), 'multisite_taxonomy_meta_box' ) ) { // WPCS: input var okay.
-			return $post_id;
+			return $obj_id;
 		}
 
 		// If this is an autosave, our form has not been submitted, so we don't want to do anything.
 		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-			return $post_id;
+			return $obj_id;
 		}
 
-		if ( ! current_user_can( 'assign_multisite_terms', $post_id ) ) {
-			return $post_id;
+		if ( ! current_user_can( 'assign_multisite_terms', $obj_id ) ) {
+			return $obj_id;
 		}
 
-		$post = get_post( $post_id );
+		// @todo: maybe it's more elegant to wrap this function, add another parameter for object-type + add error-handling?!
+		$screen = get_current_screen();
 
-		if ( count( (array) get_object_multisite_taxonomies( $post->post_type ) ) <= 0 ) {
-			return $post_id;
+		// we are on a profile-page (network-wide or in a blog)
+		if ( in_array( $screen->base, array( 'user-edit-network', 'profile-network', 'profile' ), true ) ) {
+			$object_type = 'user';
+		} else { // we are on a post-page.
+			$post        = get_post( $obj_id );
+			$object_type = $post->post_type;
+		}
+
+		// check if there is a taxonomy registered for this object-type.
+		if ( count( (array) get_object_multisite_taxonomies( $object_type ) ) <= 0 ) {
+			error_log( 'No obj found for multisite taxonomy...' . __FILE__ . ' on line ' . __LINE__ );
+			return $obj_id;
 		}
 
 		if ( isset( $_POST['multi_tax_input'] ) ) { // WPCS: Input var OK.
 			$multi_tax_input = sanitize_multisite_taxonomy_save_data( wp_unslash( $_POST['multi_tax_input'] ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 		}
 
-		/* OK, its safe for us to save the data now. */
-		$blog_id = get_current_blog_id();
+		if ( empty( $multi_tax_input ) || ! is_array( $multi_tax_input ) ) {
+			return $obj_id;
+		}
+
+		// it might make sense, to always set blog_id to 1 for global objects like users or blogs.
+		$blog_id = apply_filters( 'multisite_taxonomy_blog_id_before_save', get_current_blog_id(), $object_type, $multi_tax_input );
 
 		// New-style support for all custom taxonomies.
-		if ( ! empty( $multi_tax_input ) && is_array( $multi_tax_input ) ) {
-			foreach ( $multi_tax_input as $taxonomy => $terms ) {
-				$taxonomy_obj = get_multisite_taxonomy( $taxonomy );
+		foreach ( $multi_tax_input as $taxonomy => $terms ) {
+			$taxonomy_obj = get_multisite_taxonomy( $taxonomy );
 
-				if ( ! $taxonomy_obj ) {
-					/* translators: %s: taxonomy name */
-					_doing_it_wrong( __FUNCTION__, esc_html( sprintf( __( 'Invalid taxonomy: %s.', 'multitaxo' ), $taxonomy ) ), '4.4.0' );
-					continue;
-				}
+			if ( ! $taxonomy_obj ) {
+				/* translators: %s: taxonomy name */
+				_doing_it_wrong( __FUNCTION__, esc_html( sprintf( __( 'Invalid multisite-taxonomy: %s.', 'multitaxo' ), $taxonomy ) ), '4.4.0' );
+				continue;
+			}
 
-				// array = hierarchical, string = non-hierarchical.
-				if ( is_array( $terms ) ) {
-					$terms = array_filter( $terms );
-				}
+			// array = hierarchical, string = non-hierarchical.
+			if ( is_array( $terms ) ) {
+				$terms = array_filter( $terms );
+			}
 
-				if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
-					set_post_multisite_terms( $post_id, $terms, $taxonomy, $blog_id );
-				}
+			if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
+				set_post_multisite_terms( $obj_id, $terms, $taxonomy, $blog_id );
 			}
 		}
 	}
+
 }

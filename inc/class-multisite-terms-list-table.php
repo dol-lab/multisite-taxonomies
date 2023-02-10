@@ -6,7 +6,7 @@
  */
 
 /**
- * Core class used to implement displaying multiste terms in a list table.
+ * Core class used to implement displaying multisite terms in a list table.
  *
  * @access private
  *

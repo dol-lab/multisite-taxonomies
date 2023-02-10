@@ -172,14 +172,25 @@ class Multisite_Taxonomy {
 	 * @global WP $wp WP instance.
 	 *
 	 * @param string       $multisite_taxonomy    Multisite taxonomy key, must not exceed 32 characters.
-	 * @param array|string $object_type Name of the object type for the multisite taxonomy object.
+	 * @param array|string $object_types Name of the object type for the multisite taxonomy object.
 	 * @param array|string $args        Optional. Array or query string of arguments for registering a multisite taxonomy.
 	 *                                  Default empty array.
 	 */
-	public function __construct( $multisite_taxonomy, $object_type, $args = array() ) {
+	public function __construct( $multisite_taxonomy, $object_types, $args = array() ) {
 		$this->name = $multisite_taxonomy;
 
-		$this->set_props( $object_type, $args );
+		$has_special_object_type = count( array_intersect( (array) $object_types, array( 'user', 'blog' ) ) );
+		if ( $has_special_object_type && count( (array) $object_types ) > 1 ) {
+			/**
+			 * This will probably only happen to developers if they try using multiple object-types.
+			 * We can currently not distinguish between the user/blog with the id 1 and the post with the id 1.
+			 */
+			wp_die(
+				'Sorry. Different object types (containing "user" or "blog") in the same multisite-taxonomy are currently not supported.'
+			);
+		}
+
+		$this->set_props( $object_types, $args );
 
 		// callback for adding a MS term.
 		add_action( 'wp_ajax_add-multisite-hierarchical-term-' . $this->name, 'ajax_add_multisite_hierarchical_term' );
@@ -190,10 +201,10 @@ class Multisite_Taxonomy {
 	 *
 	 * @access public
 	 *
-	 * @param array|string $object_type Name of the object type for the multisite taxonomy object.
+	 * @param array|string $object_types Name of the object type for the multisite taxonomy object.
 	 * @param array|string $args        Array or query string of arguments for registering a multisite taxonomy.
 	 */
-	public function set_props( $object_type, $args ) {
+	public function set_props( $object_types, $args ) {
 		$args = wp_parse_args( $args );
 
 		/**
@@ -201,9 +212,9 @@ class Multisite_Taxonomy {
 		 *
 		 * @param array  $args        Array of arguments for registering a multisite taxonomy.
 		 * @param string $multisite_taxonomy    Multisite taxonomy key.
-		 * @param array  $object_type Array of names of object types for the multisite taxonomy.
+		 * @param array  $object_types Array of names of object types for the multisite taxonomy.
 		 */
-		$args = apply_filters( 'register_multisite_taxonomy_args', $args, $this->name, (array) $object_type );
+		$args = apply_filters( 'register_multisite_taxonomy_args', $args, $this->name, (array) $object_types );
 
 		$defaults = array(
 			'labels'                     => array(),
@@ -296,7 +307,7 @@ class Multisite_Taxonomy {
 		$args['cap'] = (object) array_merge( $default_caps, $args['capabilities'] );
 		unset( $args['capabilities'] );
 
-		$args['object_type'] = array_unique( (array) $object_type );
+		$args['object_type'] = array_unique( (array) $object_types );
 
 		// If not set, use the default meta box.
 		if ( null === $args['meta_box_cb'] ) {

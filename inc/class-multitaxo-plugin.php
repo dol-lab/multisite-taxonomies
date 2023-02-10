@@ -14,7 +14,7 @@ class Multitaxo_Plugin {
 	 * List table class.
 	 *
 	 * @access private
-	 * @var object
+	 * @var Multisite_Terms_List_Table
 	 */
 	private $list_table;
 
@@ -41,8 +41,8 @@ class Multitaxo_Plugin {
 		add_action( 'admin_head', array( $this, 'hide_network_menu_terms' ), 1 );
 
 		// register our tables to WPDB.
-		add_action( 'init', array( $this, 'register_database_tables' ), 1 );
-		add_action( 'switch_blog', array( $this, 'register_database_tables' ) );
+		add_action( 'init', array( __CLASS__, 'register_database_tables' ), 1 );
+		add_action( 'switch_blog', array( __CLASS__, 'register_database_tables' ) );
 
 		// register the ajax response for creating new tags.
 		add_action( 'wp_ajax_add-multisite-tag', array( $this, 'ajax_add_multisite_tag' ) );
@@ -60,7 +60,7 @@ class Multitaxo_Plugin {
 	 * @access public
 	 * @return void
 	 */
-	public function register_database_tables() {
+	public static function register_database_tables() {
 		global $wpdb;
 
 		$wpdb->multisite_termmeta                = $wpdb->base_prefix . 'multisite_termmeta';
@@ -69,7 +69,7 @@ class Multitaxo_Plugin {
 		$wpdb->multisite_term_multisite_taxonomy = $wpdb->base_prefix . 'multisite_term_multisite_taxonomy';
 
 		if ( false === get_site_option( 'multitaxo_tables_created' ) ) {
-			$this->create_database_tables();
+			self::create_database_tables();
 		}
 	}
 
@@ -117,7 +117,7 @@ class Multitaxo_Plugin {
 	 * @return void
 	 */
 	public function activation_hook() {
-		$this->register_database_tables();
+		self::register_database_tables();
 	}
 
 	/**
@@ -138,7 +138,7 @@ class Multitaxo_Plugin {
 	 * @access public
 	 * @return void
 	 */
-	public function create_database_tables() {
+	public static function create_database_tables() {
 		global $wpdb;
 		// Load the db delta scripts.
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -165,7 +165,7 @@ class Multitaxo_Plugin {
 			KEY meta_key (meta_key(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		//dbDelta( $multisite_termmeta_sql );
+		// dbDelta( $multisite_termmeta_sql );
 		$wpdb->query( $multisite_termmeta_sql );
 
 		// Table structure for table `wp_multisite_terms`.
@@ -179,7 +179,7 @@ class Multitaxo_Plugin {
 			KEY name (name(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		//dbDelta( $multisite_terms_sql );
+		// dbDelta( $multisite_terms_sql );
 		$wpdb->query( $multisite_terms_sql );
 
 		// Table structure for table `wp_multisite_term_relationships`.
@@ -192,7 +192,7 @@ class Multitaxo_Plugin {
 			KEY multisite_term_multisite_taxonomy_id (multisite_term_multisite_taxonomy_id)
 		) ' . $charset_collate . ';';
 
-		//dbDelta( $multisite_term_relationships_sql );
+		// dbDelta( $multisite_term_relationships_sql );
 		$wpdb->query( $multisite_term_relationships_sql );
 
 		// Table structure for table `wp_multisite_term_multisite_taxonomy`.
@@ -208,7 +208,7 @@ class Multitaxo_Plugin {
 			KEY multisite_taxonomy (multisite_taxonomy)
 		) ' . $charset_collate . ';';
 
-		//dbDelta( $multisite_term_multisite_taxonomy_sql );
+		// dbDelta( $multisite_term_multisite_taxonomy_sql );
 		$wpdb->query( $multisite_term_multisite_taxonomy_sql );
 
 		update_site_option( 'multitaxo_tables_created', 1 );
