@@ -1648,14 +1648,15 @@ function get_object_multisite_terms( $object_ids, $multisite_taxonomies, $blog_i
  *     @type int    $parent      The id of the parent multisite term. Default 0.
  *     @type string $slug        The multisite term slug to use. Default empty string.
  * }
+ * @param bool         $cap_check wether to check for the capability 'manage_multisite_terms'.
  * @return array|WP_Error An array containing the `multisite_term_id` and `multisite_term_multisite_taxonomy_id`,
  *                        WP_Error otherwise.
  */
-function insert_multisite_term( $multisite_term, $multisite_taxonomy, $args = array() ) {
+function insert_multisite_term( $multisite_term, $multisite_taxonomy, $args = array(), $cap_check = true ) {
 	global $wpdb;
 
 	// If the user cannot create multisite terms then kick back.
-	if ( ! current_user_can( 'manage_multisite_terms' ) ) {
+	if ( ! current_user_can( 'manage_multisite_terms' ) && $cap_check ) {
 		return new WP_Error( 'invalid_multisite_create_permissions', __( 'You are not authorized to create multisite terms.', 'multitaxo' ) );
 	}
 
