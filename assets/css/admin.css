@@ -116,7 +116,7 @@ ul.hierarchical-term-tabs li {
 
 .multisite-hierarchical-taxonomy-div div.tabs-panel {
     min-height: 42px;
-    max-height: 200px;
+    max-height: 400px;
     overflow: auto;
     padding: 0 0.9em;
     border: solid 1px #ddd;
@@ -148,7 +148,7 @@ ul.hierarchical-term-checklist li {
     overflow: auto;
 }
 
-.multitaxonomychecklist > li {
+.multitaxonomychecklist>li {
     float: left;
     margin-right: 25px;
     font-size: 13px;
