@@ -28,6 +28,13 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 	private $level;
 
 	/**
+	 * The multisite taxonomy name
+	 *
+	 * @var string
+	 */
+	public $taxonomy;
+
+	/**
 	 * Constructor.
 	 *
 	 * @access public
