@@ -1440,9 +1440,9 @@ function delete_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
 	$deleted_multisite_term = get_multisite_term( $multisite_term, $multisite_taxonomy );
 
 	$object_ids = (array) $wpdb->get_col( $wpdb->prepare( "SELECT object_id FROM $wpdb->multisite_term_relationships WHERE multisite_term_multisite_taxonomy_id = %d", $mtmt_id ) );
-	
+
 	foreach ( $object_ids as $object_id ) {
-		
+
 		$multisite_terms = get_object_multisite_terms(
 			$object_id,
 			$multisite_taxonomy,
