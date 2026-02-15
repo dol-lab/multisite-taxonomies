@@ -165,6 +165,30 @@ class Multisite_Taxonomy {
 	public $update_count_callback;
 
 	/**
+	 * Whether to include the taxonomy in the REST API.
+	 *
+	 * @access public
+	 * @var bool
+	 */
+	public $show_in_rest = false;
+
+	/**
+	 * To change the base url of REST API route.
+	 *
+	 * @access public
+	 * @var string|false
+	 */
+	public $rest_base = false;
+
+	/**
+	 * REST API controller class name.
+	 *
+	 * @access public
+	 * @var string|false
+	 */
+	public $rest_controller_class = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @access public
