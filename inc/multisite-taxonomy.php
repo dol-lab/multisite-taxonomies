@@ -139,7 +139,19 @@ function is_multisite_taxonomy_hierarchical( $multisite_taxonomy ) {
  * @global array $multisite_taxonomies Registered multisite taxonomies.
  *
  * @param string       $multisite_taxonomy    Multisite Taxonomy key, must not exceed 32 characters.
- * @param array|string $object_type Object type or array of object types with which the multisite taxonomy should be associated.
+ * @param array|string $object_type Object type or array of object types with which the multisite taxonomy
+ *                                  should be associated. A single taxonomy may span several object types
+ *                                  at once (e.g. array( 'post', 'user', 'blog' )).
+ *
+ *                                  These names map to an ID *namespace* in the relationship table, not to a
+ *                                  WP post type. Recognized namespaces:
+ *                                  - any post type (post, page, CPT) -> the post namespace, stored as ''.
+ *                                    The literal string 'post' is never stored; posts are always ''.
+ *                                  - 'user' -> wp_users.
+ *                                  - 'blog' -> wp_blogs.
+ *                                  Post-vs-page is not a namespace split (both are wp_posts rows); JOIN
+ *                                  wp_posts and read post_type if you need to tell them apart. Defaults to
+ *                                  array( 'post' ) when empty.
  * @param array|string $args        {
  *     Optional. Array or query string of arguments for registering a multisite taxonomy.
  *
@@ -371,7 +383,7 @@ function register_multisite_taxonomy_for_object_type( $multisite_taxonomy, $obje
 		return false;
 	}
 
-	if ( ! get_post_type_object( $object_type ) ) {
+	if ( ! in_array( $object_type, array( 'user', 'blog' ), true ) && ! get_post_type_object( $object_type ) ) {
 		return false;
 	}
 
@@ -401,7 +413,7 @@ function unregister_multisite_taxonomy_for_object_type( $multisite_taxonomy, $ob
 		return false;
 	}
 
-	if ( ! get_post_type_object( $object_type ) ) {
+	if ( ! in_array( $object_type, array( 'user', 'blog' ), true ) && ! get_post_type_object( $object_type ) ) {
 		return false;
 	}
 
@@ -474,6 +486,153 @@ function get_objects_in_multisite_term( $multisite_term_ids, $multisite_taxonomi
 		return array();
 	}
 	return $object_ids;
+}
+
+/**
+ * Get the relationship rows assigned to a multisite term, grouped by object-type namespace.
+ *
+ * Unlike get_objects_in_multisite_term(), which only returns a flat list of object IDs, this
+ * returns the full namespace context (object_type + blog_id) needed to resolve each row back
+ * to the right object (a post on a given blog, a network user, or a site). Used by the
+ * network-admin count drill-down.
+ *
+ * @global wpdb $wpdb WordPress database abstraction object.
+ *
+ * @param int    $multisite_term_id  Multisite term ID.
+ * @param string $multisite_taxonomy Multisite taxonomy name.
+ * @return array {
+ *     Relationship rows keyed by namespace. Empty namespaces are omitted.
+ *
+ *     @type array $post Rows in the post namespace (object_type ''). Each entry is an object with
+ *                       object_id (int) and blog_id (int).
+ *     @type array $user Rows in the user namespace. Each entry has object_id (int); blog_id is 0.
+ *     @type array $blog Rows in the blog namespace. Each entry has object_id (int); blog_id is 0.
+ * }
+ */
+function get_multisite_term_objects_by_type( $multisite_term_id, $multisite_taxonomy ) {
+	global $wpdb;
+
+	if ( ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
+		return array();
+	}
+
+	$rows = $wpdb->get_results( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->prepare(
+			"SELECT tr.object_id, tr.object_type, tr.blog_id
+			FROM {$wpdb->multisite_term_relationships} AS tr
+			INNER JOIN {$wpdb->multisite_term_multisite_taxonomy} AS tt
+				ON tr.multisite_term_multisite_taxonomy_id = tt.multisite_term_multisite_taxonomy_id
+			WHERE tt.multisite_term_id = %d AND tt.multisite_taxonomy = %s
+			ORDER BY tr.object_type, tr.blog_id, tr.object_id",
+			$multisite_term_id,
+			$multisite_taxonomy
+		)
+	);
+
+	$grouped = array();
+
+	foreach ( (array) $rows as $row ) {
+		// '' is the post namespace; map it to the 'post' key for callers.
+		$namespace = '' === $row->object_type ? 'post' : $row->object_type;
+
+		$grouped[ $namespace ][] = (object) array(
+			'object_id' => (int) $row->object_id,
+			'blog_id'   => (int) $row->blog_id,
+		);
+	}
+
+	return $grouped;
+}
+
+/**
+ * Get the object IDs assigned to a multisite term within a single object-type namespace,
+ * paginated and with a total count, for rendering a front-end users/sites archive.
+ *
+ * User and blog relationships are network-global (blog_id 0); the post namespace is scoped to a
+ * specific blog. Unlike get_objects_in_multisite_term(), this filters by object_type — so a single
+ * multi-namespace taxonomy can drive separate per-namespace archives — and returns the total
+ * alongside the page slice so a caller can paginate without a second full read.
+ *
+ * Pass an array of term IDs to span a term and its descendants (hierarchical roll-up, matching how
+ * the posts archive includes child terms); object IDs are de-duplicated across the set.
+ *
+ * @global wpdb $wpdb WordPress database abstraction object.
+ *
+ * @param int|int[] $multisite_term_id  Multisite term ID, or an array of term IDs to union over.
+ * @param string $multisite_taxonomy Multisite taxonomy name.
+ * @param string $object_type        ID namespace: '' (posts), 'user', or 'blog'.
+ * @param array  $args {
+ *     Optional. Pagination / order arguments.
+ *
+ *     @type int    $number  Maximum number of IDs to return. 0 returns all. Default 0.
+ *     @type int    $offset  Number of leading IDs to skip. Default 0.
+ *     @type string $order   'ASC' or 'DESC', by object_id. Default 'ASC'.
+ *     @type int    $blog_id Blog scope for the post namespace. Defaults to the current blog;
+ *                           ignored for the user/blog namespaces (always network-global, blog_id 0).
+ * }
+ * @return array {
+ *     @type int[] $ids   Object IDs for the requested page.
+ *     @type int   $total Total matching object IDs across all pages.
+ * }
+ */
+function get_multisite_term_object_ids( $multisite_term_id, $multisite_taxonomy, $object_type = '', $args = array() ) {
+	global $wpdb;
+
+	$empty = array(
+		'ids'   => array(),
+		'total' => 0,
+	);
+
+	if ( ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
+		return $empty;
+	}
+
+	$defaults = array(
+		'number'  => 0,
+		'offset'  => 0,
+		'order'   => 'ASC',
+		'blog_id' => 0,
+	);
+	$args     = wp_parse_args( $args, $defaults );
+
+	$term_ids = array_filter( array_map( 'intval', (array) $multisite_term_id ) );
+	if ( empty( $term_ids ) ) {
+		return $empty;
+	}
+	$term_in = implode( ',', $term_ids );
+
+	$object_type = normalize_multisite_object_type( $object_type );
+	$blog_id     = multisite_relationship_blog_id( $object_type, (int) $args['blog_id'] );
+	$order       = ( 'desc' === strtolower( $args['order'] ) ) ? 'DESC' : 'ASC';
+
+	// The WHERE values are escaped here ($term_in is a sanitized int list); table names come from
+	// $wpdb properties. DISTINCT de-duplicates objects assigned under more than one term in the set.
+	$from_where = $wpdb->prepare(
+		"FROM {$wpdb->multisite_term_relationships} AS tr
+		INNER JOIN {$wpdb->multisite_term_multisite_taxonomy} AS tt
+			ON tr.multisite_term_multisite_taxonomy_id = tt.multisite_term_multisite_taxonomy_id
+		WHERE tt.multisite_term_id IN ($term_in) AND tt.multisite_taxonomy = %s AND tr.object_type = %s AND tr.blog_id = %d",
+		$multisite_taxonomy,
+		$object_type,
+		$blog_id
+	);
+
+	$total = (int) $wpdb->get_var( "SELECT COUNT(DISTINCT tr.object_id) $from_where" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	if ( 0 === $total ) {
+		return $empty;
+	}
+
+	$number = max( 0, (int) $args['number'] );
+	$offset = max( 0, (int) $args['offset'] );
+	$limit  = ( $number > 0 ) ? $wpdb->prepare( ' LIMIT %d OFFSET %d', $number, $offset ) : '';
+
+	$ids = $wpdb->get_col( "SELECT DISTINCT tr.object_id $from_where ORDER BY tr.object_id $order" . $limit ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	return array(
+		'ids'   => array_map( 'intval', (array) $ids ),
+		'total' => $total,
+	);
 }
 
 /**
@@ -1310,8 +1469,9 @@ function count_multisite_terms( $multisite_taxonomy, $args = array() ) {
  * @param int          $object_id  The multisite term Object Id that refers to the multisite term.
  * @param string|array $multisite_taxonomies List of multisite taxonomy names or single multisite taxonomy name.
  * @param int          $blog_id  The blog_id that the Object Id belongs to. Default is current blog id.
+ * @param string       $object_type Optional. ID namespace of `$object_id`: '' (post, default), 'user', or 'blog'.
  */
-function delete_object_multisite_term_relationships( $object_id, $multisite_taxonomies, $blog_id ) {
+function delete_object_multisite_term_relationships( $object_id, $multisite_taxonomies, $blog_id, $object_type = '' ) {
 	$object_id = (int) $object_id;
 
 	if ( ! is_array( $multisite_taxonomies ) ) {
@@ -1325,10 +1485,11 @@ function delete_object_multisite_term_relationships( $object_id, $multisite_taxo
 			$blog_id,
 			array(
 				'fields' => 'ids',
-			)
+			),
+			$object_type
 		);
 		$multisite_term_ids = array_map( 'intval', $multisite_term_ids );
-		remove_object_multisite_terms( $object_id, $multisite_term_ids, $multisite_taxonomy, $blog_id );
+		remove_object_multisite_terms( $object_id, $multisite_term_ids, $multisite_taxonomy, $blog_id, $object_type );
 	}
 }
 
@@ -1464,6 +1625,19 @@ function delete_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
 		set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy );
 	}
 
+	/*
+	 * The reassignment loop above clears post-namespace (and inferred single-namespace)
+	 * relationships, but user/blog rows are stored at blog_id = 0 and would otherwise be
+	 * left orphaned when the term is deleted. Remove any remaining rows for this term.
+	 */
+	$wpdb->delete(
+		$wpdb->multisite_term_relationships,
+		array(
+			'multisite_term_multisite_taxonomy_id' => $mtmt_id,
+			'blog_id'                              => 0,
+		)
+	);
+
 	// Clean the relationship caches for all object types using this multisite term.
 	$multisite_tax_object = get_multisite_taxonomy( $multisite_taxonomy );
 	foreach ( $multisite_tax_object->object_type as $object_type ) {
@@ -1543,19 +1717,16 @@ function delete_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
  * @param string|array $multisite_taxonomies The multisite taxonomies to retrieve multisite terms from.
  * @param int          $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
  * @param array|string $args See Multisite_Term_Query::__construct() for supported arguments.
+ * @param string       $object_type Optional. ID namespace to restrict to: '' (post, default), 'user', or 'blog'.
+ *                                  For a single-namespace taxonomy it is inferred when omitted. See plan.md.
  * @return array|WP_Error The requested multisite term data or empty array if no multisite terms found.
  *                        WP_Error if any of the $multisite_taxonomies don't exist.
  */
-function get_object_multisite_terms( $object_ids, $multisite_taxonomies, $blog_id = 0, $args = array() ) {
+function get_object_multisite_terms( $object_ids, $multisite_taxonomies, $blog_id = 0, $args = array(), $object_type = '' ) {
 	global $wpdb;
 
 	if ( empty( $object_ids ) || empty( $multisite_taxonomies ) ) {
 		return array();
-	}
-
-	// Check that our blog ID is set, otherwise just get the current.
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
 	}
 
 	if ( ! is_array( $multisite_taxonomies ) ) {
@@ -1568,6 +1739,14 @@ function get_object_multisite_terms( $object_ids, $multisite_taxonomies, $blog_i
 		}
 	}
 
+	// Resolve the ID namespace (inferred for single-namespace taxonomies), then normalize blog_id.
+	if ( 1 === count( $multisite_taxonomies ) ) {
+		$object_type = resolve_multisite_object_type( $object_type, reset( $multisite_taxonomies ) );
+	} else {
+		$object_type = normalize_multisite_object_type( $object_type );
+	}
+	$blog_id = multisite_relationship_blog_id( $object_type, $blog_id );
+
 	if ( ! is_array( $object_ids ) ) {
 		$object_ids = array( $object_ids );
 	}
@@ -1576,8 +1755,9 @@ function get_object_multisite_terms( $object_ids, $multisite_taxonomies, $blog_i
 
 	$args = wp_parse_args( $args );
 
-	$args['taxonomy']   = $multisite_taxonomies;
-	$args['object_ids'] = $object_ids;
+	$args['taxonomy']    = $multisite_taxonomies;
+	$args['object_ids']  = $object_ids;
+	$args['object_type'] = $object_type;
 
 	$multisite_terms = get_multisite_terms( $args );
 
@@ -1922,6 +2102,92 @@ function insert_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
 }
 
 /**
+ * Normalize an object type to the value stored in the relationships `object_type` column.
+ *
+ * The column records the ID namespace of `object_id`, not the WP post type:
+ * '' = post namespace (post, page, any CPT), 'user' = wp_users, 'blog' = wp_blogs.
+ * Posts are always stored as '' (never the literal 'post'), so anything that is not
+ * explicitly 'user' or 'blog' normalizes to ''. See plan.md.
+ *
+ * @param string $object_type Raw object type (e.g. '', 'post', 'page', a CPT, 'user', 'blog').
+ * @return string Normalized object type: '' , 'user', or 'blog'.
+ */
+function normalize_multisite_object_type( $object_type ) {
+	if ( 'user' === $object_type || 'blog' === $object_type ) {
+		return $object_type;
+	}
+	return '';
+}
+
+/**
+ * Resolve the object type for a relationship, inferring it from the taxonomy when possible.
+ *
+ * If `$object_type` is empty and the taxonomy is registered for exactly one object type that
+ * is 'user' or 'blog', that value is used. This lets callers omit `$object_type` for
+ * single-namespace user/blog taxonomies while post-namespace assignments stay ''.
+ *
+ * @param string $object_type        Raw object type, may be empty.
+ * @param string $multisite_taxonomy Multisite taxonomy name.
+ * @return string Normalized object type: '' , 'user', or 'blog'.
+ */
+function resolve_multisite_object_type( $object_type, $multisite_taxonomy ) {
+	$object_type = normalize_multisite_object_type( $object_type );
+	if ( '' !== $object_type ) {
+		return $object_type;
+	}
+
+	$tax = get_multisite_taxonomy( $multisite_taxonomy );
+	if ( $tax && is_array( $tax->object_type ) && 1 === count( $tax->object_type ) ) {
+		$only = normalize_multisite_object_type( reset( $tax->object_type ) );
+		if ( 'user' === $only || 'blog' === $only ) {
+			return $only;
+		}
+	}
+	return '';
+}
+
+/**
+ * Whether a taxonomy is registered for the namespace represented by `$object_type`.
+ *
+ * @param string $object_type        Normalized object type: '' , 'user', or 'blog'.
+ * @param string $multisite_taxonomy Multisite taxonomy name.
+ * @return bool True if the taxonomy accepts this object type.
+ */
+function multisite_taxonomy_supports_object_type( $object_type, $multisite_taxonomy ) {
+	$tax = get_multisite_taxonomy( $multisite_taxonomy );
+	if ( ! $tax || ! is_array( $tax->object_type ) ) {
+		return false;
+	}
+	foreach ( $tax->object_type as $registered ) {
+		if ( normalize_multisite_object_type( $registered ) === $object_type ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Resolve the blog_id to store for a relationship row.
+ *
+ * User and blog relationships are network-global: their `object_id` is a user/blog ID and
+ * the blog context is meaningless, so they are always stored with `blog_id = 0`. Post-namespace
+ * relationships fall back to the current blog when none is supplied (legacy behavior).
+ *
+ * @param string $object_type Normalized object type: '' , 'user', or 'blog'.
+ * @param int    $blog_id     Requested blog ID.
+ * @return int Blog ID to store.
+ */
+function multisite_relationship_blog_id( $object_type, $blog_id = 0 ) {
+	if ( 'user' === $object_type || 'blog' === $object_type ) {
+		return 0;
+	}
+	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
+		$blog_id = get_current_blog_id();
+	}
+	return $blog_id;
+}
+
+/**
  * Create multisite term and multisite taxonomy relationships.
  *
  * Relates an object (post) to a multisite term and multisite taxonomy type. Creates the
@@ -1941,21 +2207,22 @@ function insert_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
  * @param string           $multisite_taxonomy  The context in which to relate the multisite term to the object.
  * @param int              $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
  * @param bool             $append    Optional. If false will delete difference of multisite terms. Default false.
+ * @param string           $object_type Optional. ID namespace of `$object_id`: '' (post, default), 'user', or 'blog'.
+ *                                      May be omitted for single-namespace taxonomies; it is then inferred. See plan.md.
  * @return array|WP_Error Multisite term multisite taxonomy IDs of the affected multisite terms.
  */
-function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0, $append = false ) {
+function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0, $append = false, $object_type = '' ) {
 	global $wpdb;
 
 	$object_id = (int) $object_id;
 
-	// Check that our blog ID is set, otherwise just get the current.
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
-	}
-
 	if ( ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
 		return new WP_Error( 'invalid_multisite_taxonomy', __( 'Invalid multisite taxonomy.', 'multitaxo' ) );
 	}
+
+	// Resolve the ID namespace, then normalize blog_id (user/blog rows are network-global, blog_id = 0).
+	$object_type = resolve_multisite_object_type( $object_type, $multisite_taxonomy );
+	$blog_id     = multisite_relationship_blog_id( $object_type, $blog_id );
 
 	if ( ! is_array( $multisite_terms ) ) {
 		$multisite_terms = array( $multisite_terms );
@@ -1969,7 +2236,8 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
 			array(
 				'fields'  => 'mtmt_ids',
 				'orderby' => 'none',
-			)
+			),
+			$object_type
 		);
 	} else {
 		$old_mtmt_ids = array();
@@ -1999,7 +2267,7 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
 		$mtmt_id              = $multisite_term_info['multisite_term_multisite_taxonomy_id'];
 		$mtmt_ids[]           = $mtmt_id;
 
-		if ( $wpdb->get_var( $wpdb->prepare( "SELECT multisite_term_multisite_taxonomy_id FROM $wpdb->multisite_term_relationships WHERE blog_id = %d AND object_id = %d AND multisite_term_multisite_taxonomy_id = %d", $blog_id, $object_id, $mtmt_id ) ) ) {
+		if ( $wpdb->get_var( $wpdb->prepare( "SELECT multisite_term_multisite_taxonomy_id FROM $wpdb->multisite_term_relationships WHERE blog_id = %d AND object_id = %d AND multisite_term_multisite_taxonomy_id = %d AND object_type = %s", $blog_id, $object_id, $mtmt_id, $object_type ) ) ) {
 			continue;
 		}
 
@@ -2011,14 +2279,17 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
 		 * @param string $multisite_taxonomy Multisite taxonomy slug.
 		 */
 		do_action( 'add_multisite_term_relationship', $object_id, $mtmt_id, $multisite_taxonomy );
-		$wpdb->insert(
+		if ( false === $wpdb->insert(
 			$wpdb->multisite_term_relationships,
 			array(
 				'object_id'                            => $object_id,
 				'multisite_term_multisite_taxonomy_id' => $mtmt_id,
 				'blog_id'                              => $blog_id,
+				'object_type'                          => $object_type,
 			)
-		);
+		) ) {
+			return new WP_Error( 'db_insert_error', __( 'Could not insert multisite term relationship into the database', 'multitaxo' ), $wpdb->last_error );
+		}
 
 		/**
 		 * Fires immediately after an object-multisite_term relationship is added.
@@ -2042,7 +2313,7 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
 			$delete_multisite_term_ids = $wpdb->get_col( $wpdb->prepare( "SELECT tt.multisite_term_id FROM $wpdb->multisite_term_multisite_taxonomy AS tt WHERE tt.multisite_taxonomy = %s AND tt.multisite_term_multisite_taxonomy_id IN ($in_delete_mtmt_ids)", $multisite_taxonomy ) );
 			$delete_multisite_term_ids = array_map( 'intval', $delete_multisite_term_ids );
 
-			$remove = remove_object_multisite_terms( $object_id, $delete_multisite_term_ids, $multisite_taxonomy, $blog_id );
+			$remove = remove_object_multisite_terms( $object_id, $delete_multisite_term_ids, $multisite_taxonomy, $blog_id, $object_type );
 			if ( is_wp_error( $remove ) ) {
 				return $remove;
 			}
@@ -2059,15 +2330,16 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
 			$blog_id,
 			array(
 				'fields' => 'mtmt_ids',
-			)
+			),
+			$object_type
 		);
 		foreach ( $mtmt_ids as $mtmt_id ) {
 			if ( in_array( $mtmt_id, $final_mtmt_ids, true ) ) {
-				$values[] = $wpdb->prepare( '(%d, %d, %d)', $object_id, $mtmt_id, ++$multisite_term_order );
+				$values[] = $wpdb->prepare( '(%d, %d, %d, %s)', $object_id, $mtmt_id, ++$multisite_term_order, $object_type );
 			}
 		}
 		if ( $values ) {
-			if ( false === $wpdb->query( "INSERT INTO $wpdb->multisite_term_relationships (object_id, multisite_term_multisite_taxonomy_id, multisite_term_order) VALUES " . join( ',', $values ) . ' ON DUPLICATE KEY UPDATE multisite_term_order = VALUES(multisite_term_order)' ) ) {
+			if ( false === $wpdb->query( "INSERT INTO $wpdb->multisite_term_relationships (object_id, multisite_term_multisite_taxonomy_id, multisite_term_order, object_type) VALUES " . join( ',', $values ) . ' ON DUPLICATE KEY UPDATE multisite_term_order = VALUES(multisite_term_order)' ) ) {
 				return new WP_Error( 'db_insert_error', __( 'Could not insert multisite term relationship into the database', 'multitaxo' ), $wpdb->last_error );
 			}
 		}
@@ -2097,11 +2369,12 @@ function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
  * @param array|int|string $multisite_terms     The slug(s) or ID(s) of the multisite term(s) to add.
  * @param array|string     $multisite_taxonomy  Multisite taxonomy name.
  * @param int              $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
+ * @param string           $object_type Optional. ID namespace of `$object_id`: '' (post, default), 'user', or 'blog'.
  *
  * @return array|WP_Error Multisite term multisite taxonomy IDs of the affected multisite terms.
  */
-function add_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0 ) {
-	return set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id, true );
+function add_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0, $object_type = '' ) {
+	return set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id, true, $object_type );
 }
 
 /**
@@ -2113,22 +2386,22 @@ function add_object_multisite_terms( $object_id, $multisite_terms, $multisite_ta
  * @param array|int|string $multisite_terms     The slug(s) or ID(s) of the multisite term(s) to remove.
  * @param array|string     $multisite_taxonomy  Multisite taxonomy name.
  * @param int              $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
+ * @param string           $object_type Optional. ID namespace of `$object_id`: '' (post, default), 'user', or 'blog'.
  *
  * @return bool|WP_Error True on success, false or WP_Error on failure.
  */
-function remove_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0 ) {
+function remove_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0, $object_type = '' ) {
 	global $wpdb;
-
-	// Check that our blog ID is set, otherwise just get the current.
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
-	}
 
 	$object_id = (int) $object_id;
 
 	if ( ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
 		return new WP_Error( 'invalid_multisite_taxonomy', __( 'Invalid taxonomy.', 'multitaxo' ) );
 	}
+
+	// Resolve the ID namespace, then normalize blog_id (user/blog rows are network-global, blog_id = 0).
+	$object_type = resolve_multisite_object_type( $object_type, $multisite_taxonomy );
+	$blog_id     = multisite_relationship_blog_id( $object_type, $blog_id );
 
 	if ( ! is_array( $multisite_terms ) ) {
 		$multisite_terms = array( $multisite_terms );
@@ -2168,7 +2441,12 @@ function remove_object_multisite_terms( $object_id, $multisite_terms, $multisite
 		 * @param string $multisite_taxonomy  Multisite taxonomy slug.
 		 */
 		do_action( 'delete_multisite_term_relationships', $object_id, $blog_id, $mtmt_ids, $multisite_taxonomy );
-		$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->multisite_term_relationships WHERE object_id = %d AND blog_id = %d AND multisite_term_multisite_taxonomy_id IN ($in_mtmt_ids)", $object_id, $blog_id ) );
+		$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->multisite_term_relationships WHERE object_id = %d AND blog_id = %d AND object_type = %s AND multisite_term_multisite_taxonomy_id IN ($in_mtmt_ids)", $object_id, $blog_id, $object_type ) );
+
+		// `false` is a query error; `0` means the rows were already gone (still success).
+		if ( false === $deleted ) {
+			return new WP_Error( 'db_delete_error', __( 'Could not delete multisite term relationship from the database', 'multitaxo' ), $wpdb->last_error );
+		}
 
 		wp_cache_delete( $object_id, $multisite_taxonomy . '_multisite_relationships' );
 		wp_cache_delete( 'last_changed', 'multisite_terms' );
@@ -2185,7 +2463,8 @@ function remove_object_multisite_terms( $object_id, $multisite_terms, $multisite
 
 		update_multisite_term_count( $mtmt_ids, $multisite_taxonomy );
 
-		return (bool) $deleted;
+		// Reaching here means the DELETE ran without error (0 rows simply means already gone).
+		return true;
 	}
 
 	return false;
@@ -3492,10 +3771,12 @@ function check_multisite_term_hierarchy_for_loops( $parent, $multisite_term_id, 
  * @param int    $post_id The post ID.
  * @param string $multisite_taxonomy Optional. The taxonomy for which to retrieve terms. Default 'post_tag'.
  * @param int    $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
+ * @param string $object_type Optional. ID namespace to restrict to: '' (post, default), 'user', or 'blog'.
+ *                            For a single-namespace taxonomy it is inferred when omitted. See plan.md.
  *
  * @return string|bool|WP_Error
  */
-function get_multisite_terms_to_edit( $post_id, $multisite_taxonomy, $blog_id = 0 ) {
+function get_multisite_terms_to_edit( $post_id, $multisite_taxonomy, $blog_id = 0, $object_type = '' ) {
 	$post_id = (int) $post_id;
 	if ( ! $post_id ) {
 		return false;
@@ -3508,7 +3789,7 @@ function get_multisite_terms_to_edit( $post_id, $multisite_taxonomy, $blog_id = 
 
 	$multisite_terms = get_object_multisite_term_cache( $post_id, $multisite_taxonomy, $blog_id );
 	if ( false === $multisite_terms ) {
-		$multisite_terms = get_object_multisite_terms( $post_id, $multisite_taxonomy, $blog_id );
+		$multisite_terms = get_object_multisite_terms( $post_id, $multisite_taxonomy, $blog_id, array(), $object_type );
 		wp_cache_add( $post_id, wp_list_pluck( $multisite_terms, 'multisite_term_id' ), $multisite_taxonomy . '_relationships' );
 	}
 

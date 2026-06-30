@@ -8,7 +8,12 @@
 
 /**
  * Implement the Multisite_Term object.
+ *
+ * Like WP_Post, this is a data object that consumers decorate with extra runtime
+ * properties (e.g. back-compat `term_id`/`value`/`taxonomy` aliases). Allow dynamic
+ * properties to avoid PHP 8.2+ deprecation notices on those assignments.
  */
+#[\AllowDynamicProperties]
 class Multisite_Term {
 
 	/**

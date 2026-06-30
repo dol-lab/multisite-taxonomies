@@ -22,6 +22,9 @@ class Multisite_Taxonomy_Meta_Box {
 		add_action( 'show_user_profile', array( $this, 'add_multisite_taxonomy_meta_box_user' ), 10, 1 );
 		add_action( 'edit_user_profile', array( $this, 'add_multisite_taxonomy_meta_box_user' ), 10, 1 );
 
+		// Network Admin -> Sites -> Edit Site: render the picker inside the site-info form.
+		add_action( 'network_site_info_form', array( $this, 'add_multisite_taxonomy_meta_box_site' ), 10, 1 );
+
 		// Add the admin scripts to the posts pages.
 		add_action( 'admin_enqueue_scripts', array( $this, 'admin_enqueue_styles_and_scripts' ) );
 
@@ -33,6 +36,9 @@ class Multisite_Taxonomy_Meta_Box {
 		add_action( 'save_post', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param ist post_id.
 		add_action( 'personal_options_update', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param is user_id.
 		add_action( 'edit_user_profile_update', array( $this, 'save_multisite_taxonomy' ), 10, 1 ); // param is user_id.
+
+		// Save the site/blog box. site-info.php processes the request after admin_init, so hook there.
+		add_action( 'admin_init', array( $this, 'save_multisite_taxonomy_site' ) );
 	}
 
 	/**
@@ -43,8 +49,11 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function add_multisite_taxonomy_meta_box_user( WP_User $profile_user ) {
-		// global $wp_meta_boxes;
-		$taxonomies = (array) get_object_multisite_taxonomies( 'user' );
+		// Only render if there is at least one taxonomy registered for the user object type.
+		if ( count( (array) get_object_multisite_taxonomies( 'user' ) ) <= 0 ) {
+			return;
+		}
+
 		$this->admin_enqueue_styles_and_scripts( 'post-new.php' );
 
 		add_meta_box(
@@ -54,16 +63,55 @@ class Multisite_Taxonomy_Meta_Box {
 			null,
 			'advanced',
 			'default',
-			array( $profile_user->ID )
+			array( $profile_user )
 		);
 
 		do_action( 'before_add_multisite_taxonomy_meta_box_user', $profile_user );
 
 		// not sure, if surrounding things with the meta-box makes a lot of sense here...
-		do_meta_boxes( get_current_screen(), 'advanced', $profile_user->ID );
+		do_meta_boxes( get_current_screen(), 'advanced', $profile_user );
 
 		do_action( 'after_add_multisite_taxonomy_meta_box_user', $profile_user );
 
+	}
+
+	/**
+	 * Render the assignment picker on the Network Admin site-edit screen (Sites -> Edit Site).
+	 *
+	 * Fired by the core `network_site_info_form` action from inside the site-info form, so the
+	 * fields submit with the form (verified against the `edit-site` nonce in the save handler).
+	 *
+	 * @param int $blog_id The site/blog ID being edited.
+	 *
+	 * @return void
+	 */
+	public function add_multisite_taxonomy_meta_box_site( $blog_id ) {
+		$blog_id = (int) $blog_id;
+
+		// Only render if there is at least one taxonomy registered for the blog object type.
+		if ( count( (array) get_object_multisite_taxonomies( 'blog' ) ) <= 0 ) {
+			return;
+		}
+
+		$site = get_site( $blog_id );
+		if ( ! $site ) {
+			return;
+		}
+
+		// The site-info form does not run through admin_enqueue_scripts with our hooks, so enqueue directly.
+		$this->admin_enqueue_styles_and_scripts( 'site-info.php' );
+
+		?>
+		<h2><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></h2>
+		<table class="form-table" role="presentation">
+			<tr>
+				<th scope="row"><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></th>
+				<td>
+					<?php $this->multisite_taxonomy_meta_box_callback( $site ); ?>
+				</td>
+			</tr>
+		</table>
+		<?php
 	}
 
 	/**
@@ -91,8 +139,8 @@ class Multisite_Taxonomy_Meta_Box {
 	 */
 	public function admin_enqueue_styles_and_scripts( $hook ) {
 
-		if ( ! in_array( $hook, array( 'post.php', 'post-new.php', 'user-edit.php' ) ) ) {
-			// We only need the scripts and styles on the edit/new post pages.
+		if ( ! in_array( $hook, array( 'post.php', 'post-new.php', 'user-edit.php', 'profile.php', 'site-info.php' ), true ) ) {
+			// We only need the scripts and styles on the post/user/site edit screens.
 			return;
 		}
 
@@ -133,14 +181,26 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function multisite_taxonomy_meta_box_callback( $obj, $metabox = '' ) {
-		$taxonomies = get_multisite_taxonomies( array(), 'objects' );
-
-		if ( is_int( $obj ) ) {
-			$obj_id = $obj;
+		// Resolve the object id and its ID namespace ('' = post, 'user', 'blog'). See plan.md.
+		if ( is_a( $obj, 'WP_User' ) ) {
+			$obj_id      = (int) $obj->ID;
+			$object_type = 'user';
+		} elseif ( is_a( $obj, 'WP_Site' ) ) {
+			$obj_id      = (int) $obj->id;
+			$object_type = 'blog';
 		} elseif ( is_a( $obj, 'WP_Post' ) ) {
-			$obj_id = $obj->ID;
-		} elseif ( is_a( $obj, 'WP_User' ) ) {
-			$obj_id = $obj->ID;
+			$obj_id      = (int) $obj->ID;
+			$object_type = '';
+		} else {
+			$obj_id      = (int) $obj;
+			$object_type = '';
+		}
+
+		// Show only the taxonomies registered for this object type; posts keep the full list.
+		if ( 'user' === $object_type || 'blog' === $object_type ) {
+			$taxonomies = get_object_multisite_taxonomies( $object_type, 'objects' );
+		} else {
+			$taxonomies = get_multisite_taxonomies( array(), 'objects' );
 		}
 
 		$tabs         = array();
@@ -179,9 +239,10 @@ class Multisite_Taxonomy_Meta_Box {
 			<?php
 
 			$args = array(
-				'title'    => $tax->labels->name,
-				'taxonomy' => $tax->name,
-				'args'     => array(),
+				'title'       => $tax->labels->name,
+				'taxonomy'    => $tax->name,
+				'object_type' => $object_type,
+				'args'        => array(),
 			);
 
 			// Are we hierarchical-term or not?
@@ -224,13 +285,13 @@ class Multisite_Taxonomy_Meta_Box {
 			return false;
 		}
 
-		$defaults              = array();
+		$defaults              = array( 'object_type' => '' );
 		$r                     = wp_parse_args( $args, $defaults );
 		$tax_name              = esc_attr( $r['taxonomy'] );
 		$taxonomy              = get_multisite_taxonomy( $r['taxonomy'] );
 		$user_can_assign_terms = current_user_can( $taxonomy->cap['assign_multisite_terms'] );
 		$comma                 = _x( ',', 'tag delimiter', 'multitaxo' );
-		$terms_to_edit         = get_multisite_terms_to_edit( $obj_id, $tax_name );
+		$terms_to_edit         = get_multisite_terms_to_edit( $obj_id, $tax_name, 0, $r['object_type'] );
 
 		if ( ! is_string( $terms_to_edit ) ) {
 			$terms_to_edit = '';
@@ -290,7 +351,7 @@ class Multisite_Taxonomy_Meta_Box {
 			return false;
 		}
 
-		$defaults = array();
+		$defaults = array( 'object_type' => '' );
 		$r        = wp_parse_args( $args, $defaults );
 		$tax_name = esc_attr( $r['taxonomy'] );
 		$taxonomy = get_multisite_taxonomy( $r['taxonomy'] );
@@ -320,6 +381,7 @@ class Multisite_Taxonomy_Meta_Box {
 						array(
 							'taxonomy'      => $tax_name,
 							'popular_terms' => $popular_ids,
+							'object_type'   => $r['object_type'],
 						)
 					);
 					?>
@@ -605,7 +667,97 @@ class Multisite_Taxonomy_Meta_Box {
 			}
 
 			if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
-				set_post_multisite_terms( $obj_id, $terms, $taxonomy, $blog_id );
+				if ( 'user' === $object_type ) {
+					// User relationships live in the 'user' namespace at blog_id = 0 (forced by set_object_multisite_terms).
+					set_object_multisite_terms( $obj_id, $this->prepare_terms_for_save( $terms, $taxonomy ), $taxonomy, 0, false, 'user' );
+				} else {
+					set_post_multisite_terms( $obj_id, $terms, $taxonomy, $blog_id );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Normalize submitted term input the way set_post_multisite_terms() does, so it can be passed
+	 * straight to set_object_multisite_terms() for the user/blog namespaces.
+	 *
+	 * Flat taxonomies submit a comma-separated string (which must be exploded into individual
+	 * names); hierarchical taxonomies submit an array of term IDs.
+	 *
+	 * @param array|string $terms    The submitted terms.
+	 * @param string       $taxonomy The taxonomy name.
+	 * @return array Normalized list of term names or IDs.
+	 */
+	private function prepare_terms_for_save( $terms, $taxonomy ) {
+		if ( empty( $terms ) ) {
+			return array();
+		}
+
+		if ( ! is_array( $terms ) ) {
+			$comma = _x( ',', 'tag delimiter', 'multitaxo' );
+
+			if ( ',' !== $comma ) {
+				$terms = str_replace( $comma, ',', $terms );
+			}
+
+			$terms = explode( ',', trim( $terms, " \n\t\r\0\x0B," ) );
+		}
+
+		// Hierarchical taxonomies must pass IDs so same-named children under different parents aren't confused.
+		if ( is_multisite_taxonomy_hierarchical( $taxonomy ) ) {
+			$terms = array_unique( array_map( 'intval', $terms ) );
+		}
+
+		return $terms;
+	}
+
+	/**
+	 * Save term assignments from the Network Admin site-edit screen (Sites -> Edit Site).
+	 *
+	 * Hooked on admin_init because wp-admin/network/site-info.php processes the `update-site`
+	 * request inline (and then redirects) after admin_init has fired. The submitted fields are
+	 * part of the core site-info form, so they are verified against its `edit-site` nonce.
+	 *
+	 * @return void
+	 */
+	public function save_multisite_taxonomy_site() {
+		// Only act on the network site-info update request.
+		if ( ! is_network_admin() ) {
+			return;
+		}
+
+		if ( ! isset( $_REQUEST['action'] ) || 'update-site' !== $_REQUEST['action'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+
+		if ( ! isset( $_POST['multi_tax_input'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing
+			return;
+		}
+
+		// Verify the core site-info form nonce (our fields ride along inside that form).
+		check_admin_referer( 'edit-site' );
+
+		$blog_id = isset( $_REQUEST['id'] ) ? (int) $_REQUEST['id'] : 0;
+		if ( ! $blog_id || ! current_user_can( 'manage_sites' ) ) {
+			return;
+		}
+
+		$multi_tax_input = sanitize_multisite_taxonomy_save_data( wp_unslash( $_POST['multi_tax_input'] ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+
+		if ( empty( $multi_tax_input ) || ! is_array( $multi_tax_input ) ) {
+			return;
+		}
+
+		foreach ( $multi_tax_input as $taxonomy => $terms ) {
+			$taxonomy_obj = get_multisite_taxonomy( $taxonomy );
+
+			if ( ! $taxonomy_obj ) {
+				continue;
+			}
+
+			if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
+				// Blog relationships live in the 'blog' namespace at blog_id = 0 (forced by set_object_multisite_terms).
+				set_object_multisite_terms( $blog_id, $this->prepare_terms_for_save( $terms, $taxonomy ), $taxonomy, 0, false, 'blog' );
 			}
 		}
 	}

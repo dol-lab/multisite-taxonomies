@@ -168,6 +168,7 @@ class Multisite_Term_Query {
 		$this->query_var_defaults = array(
 			'taxonomy'                             => null,
 			'object_ids'                           => null,
+			'object_type'                          => null,
 			'orderby'                              => 'name',
 			'order'                                => 'ASC',
 			'hide_empty'                           => true,
@@ -490,6 +491,14 @@ class Multisite_Term_Query {
 
 			$object_ids                               = implode( ', ', array_map( 'intval', $object_ids ) );
 			$this->sql_clauses['where']['object_ids'] = "tr.object_id IN ($object_ids)";
+		}
+
+		// Restrict to a single ID namespace ('' = post, 'user', 'blog') when requested.
+		// `null` means "any namespace"; '' is a real value (the post namespace), so the
+		// gate is an explicit null check rather than empty().
+		if ( null !== $args['object_type'] && ! empty( $args['object_ids'] ) ) {
+			$object_type                               = normalize_multisite_object_type( $args['object_type'] );
+			$this->sql_clauses['where']['object_type'] = $wpdb->prepare( 'tr.object_type = %s', $object_type );
 		}
 
 		/*

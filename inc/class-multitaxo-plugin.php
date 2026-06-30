@@ -11,6 +11,14 @@
 class Multitaxo_Plugin {
 
 	/**
+	 * Current database schema version. Bump when the table structure changes and add a
+	 * matching migration branch in maybe_upgrade_database().
+	 *
+	 * @var int
+	 */
+	const DB_VERSION = 2;
+
+	/**
 	 * List table class.
 	 *
 	 * @access private
@@ -19,12 +27,23 @@ class Multitaxo_Plugin {
 	private $list_table;
 
 	/**
+	 * Front-end term archive controller.
+	 *
+	 * @access private
+	 * @var Multisite_Taxonomy_Archive
+	 */
+	private static $archive_controller;
+
+	/**
 	 * __construct function.
 	 *
 	 * @access public
 	 * @return void
 	 */
 	public function __construct() {
+		// Front-end controller that renders per-blog archives for multisite taxonomy terms.
+		self::$archive_controller = new Multisite_Taxonomy_Archive();
+
 		// We enqueue both the frontend and admin styles and scripts.
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_styles_and_scripts' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'admin_enqueue_styles_and_scripts' ) );
@@ -37,6 +56,9 @@ class Multitaxo_Plugin {
 		add_action( 'network_admin_menu', array( $this, 'add_network_menu_terms' ) );
 		add_filter( 'set-screen-option', array( $this, 'multisite_set_screen_option' ), 10, 3 );
 
+		// Add link to the network-admin admin-bar dropdown.
+		add_action( 'admin_bar_menu', array( $this, 'add_admin_bar_menu' ), 21 );
+
 		// Hide menu items we dont want to make visible to the world but want to leave behind.
 		add_action( 'admin_head', array( $this, 'hide_network_menu_terms' ), 1 );
 
@@ -44,12 +66,191 @@ class Multitaxo_Plugin {
 		add_action( 'init', array( __CLASS__, 'register_database_tables' ), 1 );
 		add_action( 'switch_blog', array( __CLASS__, 'register_database_tables' ) );
 
+		// Run schema migrations for installs predating the current DB version.
+		add_action( 'init', array( __CLASS__, 'maybe_upgrade_database' ), 2 );
+
 		// register the ajax response for creating new tags.
 		add_action( 'wp_ajax_add-multisite-tag', array( $this, 'ajax_add_multisite_tag' ) );
 		add_action( 'wp_ajax_inline-save-multisite-tax', array( $this, 'ajax_inline_save_multisite_tag' ) );
 
 		// register action hooks for specific actions.
 		add_action( 'before_delete_post', array( $this, 'before_delete_post_action_hook' ) );
+
+		// Filter the native network Users / Sites lists to a single multisite term when linked from
+		// the term list table's count column.
+		add_action( 'pre_get_users', array( $this, 'filter_network_users_by_multisite_term' ) );
+		add_action( 'pre_get_sites', array( $this, 'filter_network_sites_by_multisite_term' ) );
+		add_action( 'network_admin_notices', array( $this, 'multisite_term_filter_notice' ) );
+	}
+
+	/**
+	 * Read and validate the multisite-term filter carried on a network-admin list screen.
+	 *
+	 * Returns the requested taxonomy/term only in the network admin, and only when the current user
+	 * may manage the taxonomy's terms. This is read-only GET navigation (linked from the term list
+	 * table), so no nonce is required, but the capability is enforced. Per-screen gating (users.php
+	 * vs sites.php) is done by the individual callers.
+	 *
+	 * @access private
+	 * @return array|null { @type string $taxonomy, @type int $term_id } or null when not filtering.
+	 */
+	private function read_term_filter_args() {
+		if ( ! is_network_admin() ) {
+			return null;
+		}
+
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- read-only navigation link, capability-checked below.
+		$tax_slug = isset( $_GET['multisite_taxonomy'] ) ? sanitize_key( wp_unslash( $_GET['multisite_taxonomy'] ) ) : '';
+		$term_id  = isset( $_GET['multisite_term_id'] ) ? absint( wp_unslash( $_GET['multisite_term_id'] ) ) : 0;
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( '' === $tax_slug || 0 === $term_id ) {
+			return null;
+		}
+
+		$tax = get_multisite_taxonomy( $tax_slug );
+		if ( ! is_a( $tax, 'Multisite_Taxonomy' ) || ! current_user_can( $tax->cap->manage_multisite_terms ) ) {
+			return null;
+		}
+
+		return array(
+			'taxonomy' => $tax_slug,
+			'term_id'  => $term_id,
+		);
+	}
+
+	/**
+	 * The object IDs (users or sites) assigned to the filtered term, rolled up over descendants.
+	 *
+	 * @access private
+	 * @param array  $filter      The validated filter from read_term_filter_args().
+	 * @param string $object_type 'user' or 'blog'.
+	 * @return int[] Object IDs; may be empty.
+	 */
+	private function filtered_term_object_ids( $filter, $object_type ) {
+		$term_ids = $this->multisite_term_ids_with_children( $filter['term_id'], $filter['taxonomy'] );
+		$result   = get_multisite_term_object_ids( $term_ids, $filter['taxonomy'], $object_type, array( 'number' => 0 ) );
+		return $result['ids'];
+	}
+
+	/**
+	 * The term plus its descendants (hierarchical roll-up), so a parent term's filter also covers
+	 * users assigned to child terms — matching the front-end archive and the posts archive.
+	 *
+	 * @access private
+	 * @param int    $term_id  Multisite term ID.
+	 * @param string $taxonomy Multisite taxonomy name.
+	 * @return int[]
+	 */
+	private function multisite_term_ids_with_children( $term_id, $taxonomy ) {
+		$ids = array( (int) $term_id );
+
+		if ( is_multisite_taxonomy_hierarchical( $taxonomy ) ) {
+			$children = get_multisite_term_children( $term_id, $taxonomy );
+			if ( is_array( $children ) ) {
+				$ids = array_merge( $ids, array_map( 'intval', $children ) );
+			}
+		}
+
+		return array_values( array_unique( $ids ) );
+	}
+
+	/**
+	 * Restrict the network Users list to the users assigned to the filtered multisite term.
+	 *
+	 * @access public
+	 * @param WP_User_Query $query The user query for the list table.
+	 * @return void
+	 */
+	public function filter_network_users_by_multisite_term( $query ) {
+		global $pagenow;
+		if ( 'users.php' !== $pagenow ) {
+			return;
+		}
+
+		$filter = $this->read_term_filter_args();
+		if ( null === $filter ) {
+			return;
+		}
+
+		$ids = $this->filtered_term_object_ids( $filter, 'user' );
+
+		// 'include' with a non-matching id (0) forces an empty list when the term has no users;
+		// an empty 'include' would otherwise be ignored and show every user.
+		$query->set( 'include', ! empty( $ids ) ? $ids : array( 0 ) );
+	}
+
+	/**
+	 * Restrict the network Sites list to the sites assigned to the filtered multisite term.
+	 *
+	 * @access public
+	 * @param WP_Site_Query $query The site query for the list table.
+	 * @return void
+	 */
+	public function filter_network_sites_by_multisite_term( $query ) {
+		global $pagenow;
+		if ( 'sites.php' !== $pagenow ) {
+			return;
+		}
+
+		$filter = $this->read_term_filter_args();
+		if ( null === $filter ) {
+			return;
+		}
+
+		$ids = $this->filtered_term_object_ids( $filter, 'blog' );
+
+		// 'site__in' with a non-matching id (0) forces an empty list when the term has no sites.
+		$query->query_vars['site__in'] = ! empty( $ids ) ? $ids : array( 0 );
+	}
+
+	/**
+	 * Show which multisite term the network Users / Sites list is filtered by, with a clear link.
+	 *
+	 * @access public
+	 * @return void
+	 */
+	public function multisite_term_filter_notice() {
+		global $pagenow;
+		if ( 'users.php' !== $pagenow && 'sites.php' !== $pagenow ) {
+			return;
+		}
+
+		$filter = $this->read_term_filter_args();
+		if ( null === $filter ) {
+			return;
+		}
+
+		$tax  = get_multisite_taxonomy( $filter['taxonomy'] );
+		$term = get_multisite_term( $filter['term_id'], $filter['taxonomy'] );
+		if ( ! is_a( $term, 'Multisite_Term' ) ) {
+			return;
+		}
+
+		$clear = remove_query_arg( array( 'multisite_taxonomy', 'multisite_term_id' ) );
+
+		$message = ( 'sites.php' === $pagenow )
+			/* translators: 1: taxonomy singular label, 2: term name. */
+			? sprintf( __( 'Showing sites assigned to %1$s: %2$s.', 'multitaxo' ), $tax->labels->singular_name, $term->name )
+			/* translators: 1: taxonomy singular label, 2: term name. */
+			: sprintf( __( 'Showing users assigned to %1$s: %2$s.', 'multitaxo' ), $tax->labels->singular_name, $term->name );
+
+		printf(
+			'<div class="notice notice-info"><p>%s <a href="%s">%s</a></p></div>',
+			esc_html( $message ),
+			esc_url( $clear ),
+			esc_html__( 'Clear filter', 'multitaxo' )
+		);
+	}
+
+	/**
+	 * Get the shared front-end archive controller instance.
+	 *
+	 * @access public
+	 * @return Multisite_Taxonomy_Archive|null
+	 */
+	public static function get_archive_controller() {
+		return self::$archive_controller;
 	}
 
 	/**
@@ -183,12 +384,21 @@ class Multitaxo_Plugin {
 		$wpdb->query( $multisite_terms_sql );
 
 		// Table structure for table `wp_multisite_term_relationships`.
+		/*
+		 * `object_type` records the ID namespace of `object_id`:
+		 *   ''      => post namespace (post, page, any CPT) -- default and legacy value
+		 *   'user'  => wp_users
+		 *   'blog'  => wp_blogs
+		 * Posts are always stored as '' (never the literal 'post'), so the three values
+		 * stay distinct and a single taxonomy can safely span object types. See plan.md.
+		 */
 		$multisite_term_relationships_sql = 'CREATE TABLE IF NOT EXISTS `' . $wpdb->multisite_term_relationships . '` (
 			blog_id bigint(20) unsigned NOT NULL default 0,
 			object_id bigint(20) unsigned NOT NULL default 0,
 			multisite_term_multisite_taxonomy_id bigint(20) unsigned NOT NULL default 0,
 			multisite_term_order int(11) NOT NULL default 0,
-			PRIMARY KEY  (blog_id,object_id,multisite_term_multisite_taxonomy_id),
+			object_type varchar(20) NOT NULL default "",
+			PRIMARY KEY  (blog_id,object_id,multisite_term_multisite_taxonomy_id,object_type),
 			KEY multisite_term_multisite_taxonomy_id (multisite_term_multisite_taxonomy_id)
 		) ' . $charset_collate . ';';
 
@@ -213,6 +423,49 @@ class Multitaxo_Plugin {
 
 		update_site_option( 'multitaxo_tables_created', 1 );
 
+		// Fresh installs already have the latest schema, so record the current DB version.
+		update_site_option( 'multitaxo_db_version', self::DB_VERSION );
+
+	}
+
+	/**
+	 * Run schema migrations for installs created before the current DB version.
+	 *
+	 * Gated by the `multitaxo_db_version` site option so the ALTER statements only run
+	 * once per upgrade. Each migration must be safe to run against live data.
+	 *
+	 * @global wpdb $wpdb The WordPress database abstraction object.
+	 *
+	 * @access public
+	 * @return void
+	 */
+	public static function maybe_upgrade_database() {
+		global $wpdb;
+
+		// Tables not created yet: register_database_tables() handles fresh installs.
+		if ( false === get_site_option( 'multitaxo_tables_created' ) ) {
+			return;
+		}
+
+		$installed = (int) get_site_option( 'multitaxo_db_version', 0 );
+		if ( $installed >= self::DB_VERSION ) {
+			return;
+		}
+
+		// v2: add the `object_type` column to the relationships table and append it to the PK.
+		if ( $installed < 2 ) {
+			$table        = $wpdb->multisite_term_relationships;
+			$has_column   = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $table . '` LIKE %s', 'object_type' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			if ( empty( $has_column ) ) {
+				// Add the column; all existing rows default to '' (the post namespace).
+				$wpdb->query( 'ALTER TABLE `' . $table . '` ADD COLUMN object_type varchar(20) NOT NULL DEFAULT "" AFTER multisite_term_order' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+				// Rebuild the PK with object_type appended. Safe: every existing row is '',
+				// so the new key stays unique, and the leftmost prefix is preserved.
+				$wpdb->query( 'ALTER TABLE `' . $table . '` DROP PRIMARY KEY, ADD PRIMARY KEY (blog_id,object_id,multisite_term_multisite_taxonomy_id,object_type)' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+			}
+		}
+
+		update_site_option( 'multitaxo_db_version', self::DB_VERSION );
 	}
 
 	/**
@@ -231,10 +484,32 @@ class Multitaxo_Plugin {
 	 * @access public
 	 * @return void
 	 */
+	/**
+	 * Add a link to the network-admin dropdown in the admin bar.
+	 *
+	 * @param \WP_Admin_Bar $wp_admin_bar Admin bar object.
+	 * @return void
+	 */
+	public function add_admin_bar_menu( $wp_admin_bar ) {
+		if ( ! is_multisite() || ! current_user_can( 'manage_multisite_terms' ) ) {
+			return;
+		}
+		$wp_admin_bar->add_node(
+			array(
+				'id'     => 'multisite-taxonomies',
+				'title'  => esc_html__( 'Multisite Taxonomies', 'multitaxo' ),
+				'href'   => network_admin_url( 'admin.php?page=multisite_term_list' ),
+				'parent' => 'network-admin',
+			)
+		);
+	}
+
 	public function add_network_menu_terms() {
 		$screen = add_menu_page( esc_html__( 'Multisite Taxonomies', 'multitaxo' ), esc_html__( 'Taxonomies', 'multitaxo' ), 'manage_multisite_terms', 'multisite_term_list', array( $this, 'display_multisite_taxonomy_list' ), 'dashicons-tag', 22 );
 
 		add_submenu_page( 'multisite_term_list', esc_html__( 'Edit Tag', 'multitaxo' ), esc_html__( 'Edit Tag', 'multitaxo' ), 'manage_multisite_terms', 'multisite_term_edit', array( $this, 'display_multisite_taxonomy_edit_screen' ) );
+
+		add_submenu_page( 'multisite_term_list', esc_html__( 'Assigned Objects', 'multitaxo' ), esc_html__( 'Assigned Objects', 'multitaxo' ), 'manage_multisite_terms', 'multisite_term_objects', array( $this, 'display_multisite_term_objects' ) );
 
 		$taxonomies = get_multisite_taxonomies( array(), 'objects' );
 
@@ -252,6 +527,7 @@ class Multitaxo_Plugin {
 	 */
 	public function hide_network_menu_terms() {
 		remove_submenu_page( 'multisite_term_list', 'multisite_term_edit' );
+		remove_submenu_page( 'multisite_term_list', 'multisite_term_objects' );
 	}
 
 	/**
@@ -729,11 +1005,210 @@ class Multitaxo_Plugin {
 		}
 
 		foreach ( $taxonomies as $tax_slug => $tax ) {
-			echo '<li><a href="' . esc_url( 'admin.php?page=multisite_term_list_' . $tax_slug ) . '">' . esc_html( $tax->label ) . '</a></li>';
+			echo '<li><a href="' . esc_url( 'admin.php?page=multisite_term_list_' . $tax_slug ) . '">' . esc_html( $tax->label ) . '</a> <span class="description">(' . esc_html( $this->format_object_types( $tax ) ) . ')</span></li>';
 		}
 
 		echo '</ul>
 		</div>';
+	}
+
+	/**
+	 * Build a human-readable list of the object types (namespaces) a taxonomy targets.
+	 *
+	 * Any post type collapses to the single label "Posts"; "user" and "blog" map to "Users"
+	 * and "Sites". Used as an at-a-glance indicator in the taxonomy list.
+	 *
+	 * @access private
+	 * @param Multisite_Taxonomy $tax Multisite taxonomy object.
+	 * @return string Comma-separated labels, e.g. "Posts, Users".
+	 */
+	private function format_object_types( $tax ) {
+		$labels = array();
+
+		foreach ( (array) $tax->object_type as $object_type ) {
+			if ( 'user' === $object_type ) {
+				$labels['user'] = __( 'Users', 'multitaxo' );
+			} elseif ( 'blog' === $object_type ) {
+				$labels['blog'] = __( 'Sites', 'multitaxo' );
+			} else {
+				// Any post type (post, page, CPT) lives in the post namespace.
+				$labels['post'] = __( 'Posts', 'multitaxo' );
+			}
+		}
+
+		return implode( ', ', $labels );
+	}
+
+	/**
+	 * Display the objects (posts, users, sites) assigned to a single multisite term.
+	 *
+	 * Reached from the "Count" column of the term list table. Groups the term's relationship
+	 * rows by object-type namespace and renders each namespace with object titles and edit links.
+	 *
+	 * @access public
+	 * @return void
+	 */
+	public function display_multisite_term_objects() {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- read-only navigation link, gated by capability below.
+		$tax_slug = isset( $_GET['taxonomy'] ) ? sanitize_key( wp_unslash( $_GET['taxonomy'] ) ) : '';
+		$term_id  = isset( $_GET['multisite_term_id'] ) ? absint( wp_unslash( $_GET['multisite_term_id'] ) ) : 0;
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		$tax = get_multisite_taxonomy( $tax_slug );
+
+		if ( ! is_a( $tax, 'Multisite_Taxonomy' ) ) {
+			wp_die( esc_html__( 'Invalid multisite taxonomy.', 'multitaxo' ) );
+		}
+
+		if ( ! current_user_can( $tax->cap->manage_multisite_terms ) ) {
+			wp_die(
+				'<h1>' . esc_html__( 'Cheatin&#8217; uh?', 'multitaxo' ) . '</h1>' .
+				'<p>' . esc_html__( 'Sorry, you are not allowed to manage multisite terms in this multisite taxonomy.', 'multitaxo' ) . '</p>',
+				403
+			);
+		}
+
+		$term = get_multisite_term( $term_id, $tax_slug );
+
+		if ( ! is_a( $term, 'Multisite_Term' ) ) {
+			wp_die( esc_html__( 'Invalid multisite term.', 'multitaxo' ) );
+		}
+
+		$grouped   = get_multisite_term_objects_by_type( $term_id, $tax_slug );
+		$back_link = esc_url( network_admin_url( 'admin.php?page=multisite_term_list_' . $tax_slug ) );
+		?>
+		<div class="wrap">
+			<h1 class="wp-heading-inline">
+				<?php
+				/* translators: 1: taxonomy label, 2: term name. */
+				echo esc_html( sprintf( __( 'Objects assigned to %1$s: %2$s', 'multitaxo' ), $tax->labels->singular_name, $term->name ) );
+				?>
+			</h1>
+			<a href="<?php echo $back_link; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>" class="page-title-action"><?php esc_html_e( '&larr; Back to terms', 'multitaxo' ); ?></a>
+			<hr class="wp-header-end">
+			<?php
+			if ( empty( $grouped ) ) {
+				echo '<p>' . esc_html__( 'No objects are assigned to this term.', 'multitaxo' ) . '</p>';
+			} else {
+				$this->render_assigned_posts( isset( $grouped['post'] ) ? $grouped['post'] : array() );
+				$this->render_assigned_users( isset( $grouped['user'] ) ? $grouped['user'] : array() );
+				$this->render_assigned_sites( isset( $grouped['blog'] ) ? $grouped['blog'] : array() );
+			}
+			?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the post-namespace section of the assigned-objects screen.
+	 *
+	 * Posts are blog-scoped, so each row is resolved inside its own blog via switch_to_blog().
+	 *
+	 * @access private
+	 * @param array $rows Relationship rows, each with object_id and blog_id.
+	 * @return void
+	 */
+	private function render_assigned_posts( $rows ) {
+		if ( empty( $rows ) ) {
+			return;
+		}
+		echo '<h2>' . esc_html__( 'Posts', 'multitaxo' ) . '</h2>';
+
+		// Group rows by blog so the blog name is shown once as a sub-heading instead of after every post.
+		$by_blog = array();
+		foreach ( $rows as $row ) {
+			$by_blog[ $row->blog_id ][] = $row;
+		}
+
+		foreach ( $by_blog as $blog_id => $blog_rows ) {
+			switch_to_blog( $blog_id );
+			printf(
+				/* translators: %s: site (blog) name. */
+				'<h3>' . esc_html__( 'Site: %s', 'multitaxo' ) . '</h3>',
+				'<a href="' . esc_url( home_url( '/' ) ) . '">' . esc_html( get_bloginfo( 'name' ) ) . '</a>'
+			);
+			echo '<ul class="ul-disc">';
+			foreach ( $blog_rows as $row ) {
+				$post      = get_post( $row->object_id );
+				$edit_link = get_admin_url( $blog_id, 'post.php?post=' . $row->object_id . '&action=edit' );
+				if ( $post ) {
+					$title     = '' !== $post->post_title ? $post->post_title : __( '(no title)', 'multitaxo' );
+					$permalink = get_permalink( $post );
+					printf(
+						'<li><a href="%1$s">%2$s</a> <a href="%3$s" class="edit">(%4$s)</a></li>',
+						esc_url( $permalink ),
+						esc_html( $title ),
+						esc_url( $edit_link ),
+						esc_html__( 'edit', 'multitaxo' )
+					);
+				} else {
+					/* translators: %d: object ID. */
+					printf( '<li>%s</li>', esc_html( sprintf( __( 'Missing post #%d', 'multitaxo' ), $row->object_id ) ) );
+				}
+			}
+			echo '</ul>';
+			restore_current_blog();
+		}
+	}
+
+	/**
+	 * Render the user-namespace section of the assigned-objects screen.
+	 *
+	 * @access private
+	 * @param array $rows Relationship rows, each with object_id.
+	 * @return void
+	 */
+	private function render_assigned_users( $rows ) {
+		if ( empty( $rows ) ) {
+			return;
+		}
+		echo '<h2>' . esc_html__( 'Users', 'multitaxo' ) . '</h2>';
+		echo '<ul class="ul-disc">';
+		foreach ( $rows as $row ) {
+			$user = get_userdata( $row->object_id );
+			if ( $user ) {
+				printf(
+					'<li><a href="%1$s">%2$s</a> <span class="description">(%3$s)</span></li>',
+					esc_url( network_admin_url( 'user-edit.php?user_id=' . $row->object_id ) ),
+					esc_html( $user->display_name ),
+					esc_html( $user->user_email )
+				);
+			} else {
+				/* translators: %d: object ID. */
+				printf( '<li>%s</li>', esc_html( sprintf( __( 'Missing user #%d', 'multitaxo' ), $row->object_id ) ) );
+			}
+		}
+		echo '</ul>';
+	}
+
+	/**
+	 * Render the blog-namespace section of the assigned-objects screen.
+	 *
+	 * @access private
+	 * @param array $rows Relationship rows, each with object_id.
+	 * @return void
+	 */
+	private function render_assigned_sites( $rows ) {
+		if ( empty( $rows ) ) {
+			return;
+		}
+		echo '<h2>' . esc_html__( 'Sites', 'multitaxo' ) . '</h2>';
+		echo '<ul class="ul-disc">';
+		foreach ( $rows as $row ) {
+			$blog = get_blog_details( $row->object_id );
+			if ( $blog ) {
+				printf(
+					'<li><a href="%1$s">%2$s</a> <span class="description">(%3$s)</span></li>',
+					esc_url( network_admin_url( 'site-info.php?id=' . $row->object_id ) ),
+					esc_html( $blog->blogname ),
+					esc_html( $blog->siteurl )
+				);
+			} else {
+				/* translators: %d: object ID. */
+				printf( '<li>%s</li>', esc_html( sprintf( __( 'Missing site #%d', 'multitaxo' ), $row->object_id ) ) );
+			}
+		}
+		echo '</ul>';
 	}
 
 	/**

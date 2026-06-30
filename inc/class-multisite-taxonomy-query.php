@@ -614,6 +614,11 @@ class Multisite_Taxonomy_Query {
 		}
 		$resulting_field = sanitize_key( $resulting_field );
 
+		/*
+		 * $resulting_field and $query['field'] are column identifiers (sanitize_key'd), so they are
+		 * interpolated directly — a `%s` placeholder would be quoted by $wpdb->prepare() and turned into
+		 * a string literal. Only the taxonomy value is bound via %s.
+		 */
 		switch ( $query['field'] ) {
 			case 'slug':
 			case 'name':
@@ -625,45 +630,42 @@ class Multisite_Taxonomy_Query {
 					 */
 					$multisite_term = "'" . esc_sql( sanitize_multisite_term_field( $query['field'], $multisite_term, 0, $query['multisite_taxonomy'], 'db' ) ) . "'";
 				}
+				unset( $multisite_term );
 
+				$field           = sanitize_key( $query['field'] );
 				$multisite_terms = $wpdb->get_col(
 					$wpdb->prepare(
 						"
-					SELECT %s
+					SELECT $wpdb->multisite_term_multisite_taxonomy.$resulting_field
 					FROM $wpdb->multisite_term_multisite_taxonomy
 					INNER JOIN $wpdb->multisite_terms USING (multisite_term_id)
-					WHERE multisite_taxonomy = '{%s}'
-					AND $wpdb->multisite_terms.{%s} IN ( '" . implode( "', '", esc_sql( $query['multisite_terms'] ) ) . "' )
+					WHERE multisite_taxonomy = %s
+					AND $wpdb->multisite_terms.$field IN ( " . implode( ', ', $query['multisite_terms'] ) . " )
 				",
-						$wpdb->multisite_term_multisite_taxonomy . $resulting_field,
-						$query['multisite_taxonomy'],
-						$query['field']
+						$query['multisite_taxonomy']
 					)
 				);
 				break;
 			case 'multisite_term_multisite_taxonomy_id':
+				$ids             = implode( ',', array_map( 'intval', $query['multisite_terms'] ) );
 				$multisite_terms = $wpdb->get_col(
-					// @codingStandardsIgnoreStart
-					$wpdb->prepare(
-						"
-					SELECT %s
+					"
+					SELECT $resulting_field
 					FROM $wpdb->multisite_term_multisite_taxonomy
-					WHERE multisite_term_multisite_taxonomy_id IN ( '" . implode( "', '", esc_sql( $query['multisite_terms'] ) ) . "' )
+					WHERE multisite_term_multisite_taxonomy_id IN ( $ids )
 				"
-					), $resulting_field
-					// @codingStandardsIgnoreEnd
 				);
 				break;
 			default:
+				$ids             = implode( ',', array_map( 'intval', $query['multisite_terms'] ) );
 				$multisite_terms = $wpdb->get_col(
 					$wpdb->prepare(
 						"
-					SELECT %s
+					SELECT $resulting_field
 					FROM $wpdb->multisite_term_multisite_taxonomy
-					WHERE multisite_taxonomy = '{%s}'
-					AND multisite_term_id IN ( '" . implode( "', '", esc_sql( $query['multisite_terms'] ) ) . "' )
+					WHERE multisite_taxonomy = %s
+					AND multisite_term_id IN ( $ids )
 				",
-						$resulting_field,
 						$query['multisite_taxonomy']
 					)
 				);

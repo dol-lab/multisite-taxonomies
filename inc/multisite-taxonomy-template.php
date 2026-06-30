@@ -37,6 +37,7 @@ function multisite_terms_checklist( $post_id = 0, $args = array() ) {
 		'checked_ontop'        => false,
 		'echo'                 => true,
 		'blog_id'              => get_current_blog_id(),
+		'object_type'          => '',
 	);
 
 	/**
@@ -68,7 +69,7 @@ function multisite_terms_checklist( $post_id = 0, $args = array() ) {
 	if ( is_array( $r['selected_terms'] ) ) {
 		$args['selected_terms'] = $r['selected_terms'];
 	} elseif ( $post_id ) {
-		$args['selected_terms'] = get_object_multisite_terms( $post_id, $multisite_taxonomy, $r['blog_id'], array_merge( $args, array( 'fields' => 'ids' ) ) );
+		$args['selected_terms'] = get_object_multisite_terms( $post_id, $multisite_taxonomy, $r['blog_id'], array_merge( $args, array( 'fields' => 'ids' ) ), $r['object_type'] );
 	} else {
 		$args['selected_terms'] = array();
 	}

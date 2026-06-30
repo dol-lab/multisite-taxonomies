@@ -559,25 +559,56 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 	 * @return string
 	 */
 	public function column_posts( $multisite_term ) {
-		$count = number_format_i18n( $multisite_term->count );
-
+		$count  = absint( $multisite_term->count );
 		$mu_tax = get_multisite_taxonomy( $this->screen->taxonomy );
 
-		if ( $mu_tax->query_var ) {
-			$args = array(
-				$mu_tax->query_var => $multisite_term->slug,
-			);
-		} else {
-			$args = array(
-				'multisite_taxonomy' => $mu_tax->name,
-				'multisite_term'     => $multisite_term->slug,
-			);
+		if ( 0 === $count ) {
+			return number_format_i18n( $count );
 		}
 
-		// Our base rewrite for all multisite tax plugins.
-		$base_rewrite = apply_filters( 'multisite_taxonomy_base_url_slug', 'multitaxo' );
+		// Link the count to the network-admin drill-down listing the assigned objects.
+		// The drill-down page registers on network_admin_menu, so the link must target
+		// the network admin — admin_url() would 403 on a network-only page.
+		$drilldown = add_query_arg(
+			array(
+				'page'              => 'multisite_term_objects',
+				'taxonomy'          => $mu_tax->name,
+				'multisite_term_id' => $multisite_term->multisite_term_id,
+			),
+			network_admin_url( 'admin.php' )
+		);
 
-		return '<a href="' . esc_url( get_multisite_term_link( $multisite_term->slug, $mu_tax->name ) ) . '">' . absint( $count ) . '</a>';
+		// Users and sites get their own destination: the native Network → Users / Sites screens,
+		// filtered to this term, so admins land in the familiar list (search, bulk actions). Posts
+		// have no equivalent network list, so they keep the generic drill-down.
+		$term_filter_args = array(
+			'multisite_taxonomy' => $mu_tax->name,
+			'multisite_term_id'  => $multisite_term->multisite_term_id,
+		);
+		$users_filter     = add_query_arg( $term_filter_args, network_admin_url( 'users.php' ) );
+		$sites_filter     = add_query_arg( $term_filter_args, network_admin_url( 'sites.php' ) );
+
+		// $multisite_term->count sums every object-type namespace (posts, users, blogs).
+		// Split it so a mixed taxonomy reads e.g. "👤 5 · 📄 12" instead of one ambiguous total.
+		$by_type = get_multisite_term_objects_by_type( $multisite_term->multisite_term_id, $mu_tax->name );
+		$icons   = array(
+			'user' => array( '👤', __( 'Users', 'multitaxo' ), $users_filter ),
+			'post' => array( '📄', __( 'Posts', 'multitaxo' ), $drilldown ),
+			'blog' => array( '🌐', __( 'Sites', 'multitaxo' ), $sites_filter ),
+		);
+		$parts   = array();
+		foreach ( $icons as $namespace => $meta ) {
+			if ( ! empty( $by_type[ $namespace ] ) ) {
+				$inner    = $meta[0] . ' ' . number_format_i18n( count( $by_type[ $namespace ] ) );
+				$parts[] = '<a href="' . esc_url( $meta[2] ) . '" title="' . esc_attr( $meta[1] ) . '">' . $inner . '</a>';
+			}
+		}
+
+		if ( ! $parts ) {
+			return '<a href="' . esc_url( $drilldown ) . '">' . number_format_i18n( $count ) . '</a>';
+		}
+
+		return implode( ' · ', $parts );
 	}
 
 	/**

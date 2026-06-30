@@ -9,7 +9,7 @@
  * Plugin Name: Multisite Taxonomies
  * Plugin URI:  https://github.com/HarvardChanSchool/multisite-taxonomies
  * Description: Multisite Taxonomies brings the ability to register custom taxonomies, accessible on an entire multisite network, to WordPress.
- * Version:     0.0.2
+ * Version:     0.1.0
  * Author:      Harvard Chan Webteam
  * Author URI:  http://www.hsph.harvard.edu/information-technology/
  * Text Domain: multitaxo
@@ -43,6 +43,7 @@ require_once MULTITAXO_PLUGIN_DIR . 'inc/class-multisite-term-query.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-multisite-wp-query.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-multisite-terms-list-table.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-multisite-taxonomy-meta-box.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/class-multisite-taxonomy-archive.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-walker-hierarchical-multisite-taxonomy.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-walker-hierarchical-multisite-taxonomy-checklist.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-walker-hierarchical-multisite-taxonomy-dropdown.php';
