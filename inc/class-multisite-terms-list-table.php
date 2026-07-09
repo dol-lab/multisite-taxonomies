@@ -47,6 +47,8 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 	 * @global object $mu_tax
 	 *
 	 * @param array $args An associative array of arguments.
+	 *
+	 * @throws InvalidArgumentException When the resolved screen has no registered multisite taxonomy.
 	 */
 	public function __construct( $args = array() ) {
 		global $post_type, $multisite_taxonomy, $action, $mu_tax;
@@ -64,7 +66,10 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 		$multisite_taxonomy = $this->screen->taxonomy;
 
 		if ( empty( $multisite_taxonomy ) || ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
-			wp_die( esc_html__( 'Invalid multisite taxonomy.', 'multitaxo' ) );
+			// Throw rather than wp_die(): this constructor runs inside ajax handlers too, where a
+			// raw die corrupts the XML response. Callers validate the taxonomy first (page context)
+			// or catch this and emit a structured error (ajax context).
+			throw new InvalidArgumentException( esc_html( Multitaxo_Plugin::invalid_taxonomy_message( $multisite_taxonomy ) ) );
 		}
 
 		$mu_tax = get_multisite_taxonomy( $multisite_taxonomy ); // phpcs:ignore WordPress.WP.GlobalVariablesOverride

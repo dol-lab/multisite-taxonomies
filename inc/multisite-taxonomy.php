@@ -1156,6 +1156,185 @@ function update_multisite_termmeta_cache( $multisite_term_ids ) {
 }
 
 /**
+ * Registry of declarative per-term "behaviors" (boolean settings), keyed by taxonomy.
+ *
+ * A behavior is a boolean flag a term carries in its meta. It renders as a checkbox
+ * in a "Behaviors" section on the term add/edit screen and is persisted to
+ * `multisite_termmeta`, so any consumer can read it back with
+ * {@see get_multisite_term_setting()} or join the meta table directly. The first
+ * intended use is spaces-core's `blog_term` taxonomy, where a term applies the flag
+ * to every blog tagged with it.
+ *
+ * @return array Registry passed by reference so registration can mutate it.
+ */
+function &multisite_term_settings_registry() {
+	static $registry = array();
+	return $registry;
+}
+
+/**
+ * Register a boolean "behavior" setting on a multisite taxonomy's terms.
+ *
+ * Idempotent per (taxonomy, key). The first setting registered for a taxonomy wires
+ * the render callbacks onto that taxonomy's add/edit-form hooks; the persistence
+ * callback is wired once globally.
+ *
+ * @param string $taxonomy Multisite taxonomy slug.
+ * @param string $key      Meta key (also the checkbox field name). Keep it globally
+ *                         unique so direct meta joins are unambiguous.
+ * @param array  $args     Optional. { @type string label, @type string description,
+ *                         @type string type ('boolean'), @type bool default }.
+ * @return void
+ */
+function register_multisite_term_setting( $taxonomy, $key, $args = array() ) {
+	$registry = &multisite_term_settings_registry();
+
+	$args = wp_parse_args(
+		$args,
+		array(
+			'label'       => $key,
+			'description' => '',
+			'type'        => 'boolean',
+			'default'     => false,
+		)
+	);
+
+	if ( empty( $registry[ $taxonomy ] ) ) {
+		add_action( "{$taxonomy}_add_form_fields", 'render_multisite_term_settings_add_fields' );
+		add_action( "{$taxonomy}_multisite_edit_form_fields", 'render_multisite_term_settings_edit_fields', 10, 2 );
+	}
+
+	$registry[ $taxonomy ][ $key ] = $args;
+
+	static $save_hooked = false;
+	if ( ! $save_hooked ) {
+		add_action( 'created_multisite_term', 'save_multisite_term_settings', 10, 3 );
+		add_action( 'edited_multisite_term', 'save_multisite_term_settings', 10, 3 );
+		$save_hooked = true;
+	}
+}
+
+/**
+ * The behaviors registered for a taxonomy.
+ *
+ * @param string $taxonomy Multisite taxonomy slug.
+ * @return array Map of key => args; empty if none registered.
+ */
+function get_multisite_term_settings( $taxonomy ) {
+	$registry = &multisite_term_settings_registry();
+	return isset( $registry[ $taxonomy ] ) ? $registry[ $taxonomy ] : array();
+}
+
+/**
+ * Read a term's behavior flag as a boolean.
+ *
+ * @param int    $term_id Multisite term ID.
+ * @param string $key     The behavior meta key.
+ * @param bool   $default Value when the meta is unset. Default false.
+ * @return bool
+ */
+function get_multisite_term_setting( $term_id, $key, $default = false ) {
+	$value = get_multisite_term_meta( (int) $term_id, $key, true );
+	if ( '' === $value || null === $value ) {
+		return (bool) $default;
+	}
+	return '1' === (string) $value;
+}
+
+/**
+ * Render the "Behaviors" section on the Add Term form (non-table markup).
+ *
+ * @param string $taxonomy Taxonomy slug (passed by the `{$taxonomy}_add_form_fields` action).
+ * @return void
+ */
+function render_multisite_term_settings_add_fields( $taxonomy ) {
+	$settings = get_multisite_term_settings( $taxonomy );
+	if ( empty( $settings ) ) {
+		return;
+	}
+	echo '<div class="form-field term-behaviors-wrap">';
+	echo '<h2>' . esc_html__( 'Behaviors', 'multitaxo' ) . '</h2>';
+	echo '<input type="hidden" name="multisite_term_settings_present" value="1" />';
+	foreach ( $settings as $key => $args ) {
+		multisite_term_setting_checkbox( $key, $args, (bool) $args['default'] );
+	}
+	echo '</div>';
+}
+
+/**
+ * Render the "Behaviors" section on the Edit Term form (table-row markup).
+ *
+ * @param object $term The current term object (has `multisite_term_id`).
+ * @param object $tax  The taxonomy object.
+ * @return void
+ */
+function render_multisite_term_settings_edit_fields( $term, $tax ) {
+	$taxonomy = is_object( $tax ) ? $tax->name : (string) $tax;
+	$settings = get_multisite_term_settings( $taxonomy );
+	if ( empty( $settings ) ) {
+		return;
+	}
+	$term_id = is_object( $term ) ? (int) $term->multisite_term_id : (int) $term;
+	echo '<tr class="form-field term-behaviors-wrap"><th scope="row">' . esc_html__( 'Behaviors', 'multitaxo' ) . '</th><td>';
+	echo '<input type="hidden" name="multisite_term_settings_present" value="1" />';
+	foreach ( $settings as $key => $args ) {
+		multisite_term_setting_checkbox( $key, $args, get_multisite_term_setting( $term_id, $key, (bool) $args['default'] ) );
+	}
+	echo '</td></tr>';
+}
+
+/**
+ * Print one behavior checkbox (shared by the add and edit renderers).
+ *
+ * @param string $key     Behavior meta key / field name.
+ * @param array  $args    Behavior args ( label, description ).
+ * @param bool   $checked Whether the box is checked.
+ * @return void
+ */
+function multisite_term_setting_checkbox( $key, $args, $checked ) {
+	printf(
+		'<p><label><input type="checkbox" name="%1$s" value="1"%2$s> %3$s</label>%4$s</p>',
+		esc_attr( $key ),
+		checked( (bool) $checked, true, false ),
+		esc_html( $args['label'] ),
+		'' !== $args['description'] ? '<br /><span class="description">' . esc_html( $args['description'] ) . '</span>' : ''
+	);
+}
+
+/**
+ * Persist behavior checkboxes when a term is created or edited through the admin form.
+ *
+ * Hooked on `created_multisite_term` and `edited_multisite_term`. The term add/edit
+ * handler verifies its nonce before firing these actions, and the hidden
+ * `multisite_term_settings_present` marker guarantees we only act on our own form
+ * submission (programmatic term updates never carry it), so an unchecked box
+ * deterministically clears the flag instead of being mistaken for "not submitted".
+ *
+ * @param int    $term_id  Multisite term ID.
+ * @param int    $tt_id    Multisite term taxonomy ID (unused).
+ * @param string $taxonomy Taxonomy slug.
+ * @return void
+ */
+function save_multisite_term_settings( $term_id, $tt_id, $taxonomy ) {
+	$settings = get_multisite_term_settings( $taxonomy );
+	if ( empty( $settings ) ) {
+		return;
+	}
+	// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified by the term add/edit handler before this action fires.
+	if ( empty( $_POST['multisite_term_settings_present'] ) ) {
+		return;
+	}
+	foreach ( array_keys( $settings ) as $key ) {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- see above.
+		if ( ! empty( $_POST[ $key ] ) ) {
+			update_multisite_term_meta( (int) $term_id, $key, '1' );
+		} else {
+			delete_multisite_term_meta( (int) $term_id, $key );
+		}
+	}
+}
+
+/**
  * Check if Multisite Term exists.
  *
  * @global wpdb $wpdb WordPress database abstraction object.

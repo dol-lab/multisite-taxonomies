@@ -119,7 +119,7 @@
 			close: function() {
 				$element.attr( 'aria-expanded', 'false' );
 			},
-			minLength: 2,
+			minLength: 0,
 			position: {
 				my: 'left top+2',
 				at: 'left bottom',
@@ -156,11 +156,9 @@
 		.on( 'focus', function() {
 			var inputValue = split( $element.val() ).pop();
 
-			// Don't trigger a search if the field is empty.
-			// Also, avoids screen readers announce `No search results`.
-			if ( inputValue ) {
-				$element.autocomplete( 'search' );
-			}
+			// Search even when empty so focusing the field offers a short list of terms to pick
+			// from without typing; the server answers the empty query with up to 10 suggestions.
+			$element.autocomplete( 'search', inputValue );
 		} )
 		// Returns a jQuery object containing the menu element.
 		.autocomplete( 'widget' )

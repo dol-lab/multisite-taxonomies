@@ -56,13 +56,13 @@ jQuery(document).ready(function($) {
 			parent = form.find( 'select#parent' ).val();
 
 			if ( parent > 0 && $('#tag-' + parent ).length > 0 ) // If the parent exists on this page, insert it below. Else insert it at the top of the list.
-				$( '.tags #tag-' + parent ).after( res.responses[0].supplemental.noparents ); // As the parent exists, Insert the version with - - - prefixed
+				$( '#the-list #tag-' + parent ).after( res.responses[0].supplemental.noparents ); // As the parent exists, Insert the version with - - - prefixed
 			else
-				$( '.tags' ).prepend( res.responses[0].supplemental.parents ); // As the parent is not visible, Insert the version with Parent - Child - This Multisite multisite_term
+				$( '#the-list' ).prepend( res.responses[0].supplemental.parents ); // As the parent is not visible, Insert the version with Parent - Child - This Multisite multisite_term
 
-			$('.tags .no-items').remove();
+			$('#the-list .no-items').remove();
 
-			if ( form.find('select#parent') ) {
+			if ( form.find('select#parent').length ) {
 				// Parents field exists, Add new multisite_term to the list.
 				multisite_term = res.responses[1].supplemental;
 

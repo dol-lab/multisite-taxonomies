@@ -136,7 +136,7 @@ class Multisite_Taxonomy {
 	 * Capabilities for this multisite taxonomy.
 	 *
 	 * @access public
-	 * @var array
+	 * @var \stdClass
 	 */
 	public $cap;
 

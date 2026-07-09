@@ -56,6 +56,10 @@ class Multisite_Taxonomy_Meta_Box {
 
 		$this->admin_enqueue_styles_and_scripts( 'post-new.php' );
 
+		// The profile screens have no metabox toggle behaviour of their own, so wire up a
+		// self-contained one that also collapses the box by default.
+		wp_enqueue_script( 'multisite-taxonomy-profile-box', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-profile-box.js', array( 'jquery' ), MULTITAXO_VERSION, 1 );
+
 		add_meta_box(
 			'multsite_taxonomy_meta_box',
 			esc_html__( 'Multisite Tags', 'multitaxo' ),
@@ -72,7 +76,6 @@ class Multisite_Taxonomy_Meta_Box {
 		do_meta_boxes( get_current_screen(), 'advanced', $profile_user );
 
 		do_action( 'after_add_multisite_taxonomy_meta_box_user', $profile_user );
-
 	}
 
 	/**
@@ -101,13 +104,26 @@ class Multisite_Taxonomy_Meta_Box {
 		// The site-info form does not run through admin_enqueue_scripts with our hooks, so enqueue directly.
 		$this->admin_enqueue_styles_and_scripts( 'site-info.php' );
 
+		// The tag picker only edits form state; nothing persists until the site-info form is
+		// submitted. Flag that unsaved state so the picker does not read as an instant save.
+		wp_enqueue_script(
+			'multisite-tags-site-info',
+			MULTITAXO_ASSETS_URL . '/js/multisite-tags-site-info.js',
+			array( 'jquery', 'multisite-taxonomy-box' ),
+			MULTITAXO_VERSION,
+			true
+		);
+
 		?>
-		<h2><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></h2>
+		<h2 id="multisite-tags"><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></h2>
 		<table class="form-table" role="presentation">
 			<tr>
-				<th scope="row"><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></th>
+				<th scope="row"><span class="screen-reader-text"><?php esc_html_e( 'Multisite Tags', 'multitaxo' ); ?></span></th>
 				<td>
 					<?php $this->multisite_taxonomy_meta_box_callback( $site ); ?>
+					<div class="notice notice-warning inline multitax-unsaved-notice" style="display:none;">
+						<p><?php esc_html_e( 'You have unsaved tag changes. Click “Save Changes” at the bottom of this page to apply them.', 'multitaxo' ); ?></p>
+					</div>
 				</td>
 			</tr>
 		</table>
@@ -175,8 +191,8 @@ class Multisite_Taxonomy_Meta_Box {
 	/**
 	 * Display the meta box content.
 	 *
-	 * @param int     $obj_id an object_id like post_id.
-	 * @param WP_Post $metabox Post object.
+	 * @param int|WP_Post|WP_User|WP_Site $obj     The object (or its id) whose terms to edit.
+	 * @param string                      $metabox Unused; kept for the add_meta_box callback signature.
 	 *
 	 * @return void
 	 */
@@ -289,7 +305,7 @@ class Multisite_Taxonomy_Meta_Box {
 		$r                     = wp_parse_args( $args, $defaults );
 		$tax_name              = esc_attr( $r['taxonomy'] );
 		$taxonomy              = get_multisite_taxonomy( $r['taxonomy'] );
-		$user_can_assign_terms = current_user_can( $taxonomy->cap['assign_multisite_terms'] );
+		$user_can_assign_terms = current_user_can( $taxonomy->cap->assign_multisite_terms );
 		$comma                 = _x( ',', 'tag delimiter', 'multitaxo' );
 		$terms_to_edit         = get_multisite_terms_to_edit( $obj_id, $tax_name, 0, $r['object_type'] );
 
@@ -487,33 +503,51 @@ class Multisite_Taxonomy_Meta_Box {
 		}
 		$s = trim( $s );
 
-		/**
-		 * Filters the minimum number of characters required to fire a tag search via Ajax.
-		 *
-		 * @since 4.0.0
-		 *
-		 * @param int                $characters The minimum number of characters required. Default 2.
-		 * @param Multisite_Taxonomy $tax        The taxonomy object.
-		 * @param string             $s          The search term.
-		 */
-		$term_search_min_chars = (int) apply_filters( 'term_search_min_chars', 2, $tax, $s );
+		$args = array(
+			'taxonomy'   => $taxonomy,
+			'fields'     => 'names',
+			'hide_empty' => false,
+		);
 
-		/*
-		* Require $term_search_min_chars chars for matching (default: 2)
-		* ensure it's a non-negative, non-zero integer.
-		*/
-		if ( ( 0 === $term_search_min_chars ) || ( strlen( $s ) < $term_search_min_chars ) ) {
-			wp_die();
+		if ( '' === $s ) {
+			/*
+			 * No query yet (the field was just focused): offer a short list of terms so the user
+			 * can pick without typing. Alphabetical for a stable, predictable order.
+			 */
+
+			/**
+			 * Filters how many suggestions the field offers when focused with no query entered.
+			 *
+			 * @param int                $number The maximum number of suggestions. Default 10.
+			 * @param Multisite_Taxonomy $tax    The taxonomy object.
+			 */
+			$args['number']  = (int) apply_filters( 'multisite_term_search_empty_number', 10, $tax );
+			$args['orderby'] = 'name';
+			$args['order']   = 'ASC';
+		} else {
+			/**
+			 * Filters the minimum number of characters required to fire a tag search via Ajax.
+			 *
+			 * @since 4.0.0
+			 *
+			 * @param int                $characters The minimum number of characters required. Default 2.
+			 * @param Multisite_Taxonomy $tax        The taxonomy object.
+			 * @param string             $s          The search term.
+			 */
+			$term_search_min_chars = (int) apply_filters( 'term_search_min_chars', 2, $tax, $s );
+
+			/*
+			* Require $term_search_min_chars chars for matching (default: 2)
+			* ensure it's a non-negative, non-zero integer.
+			*/
+			if ( ( 0 === $term_search_min_chars ) || ( strlen( $s ) < $term_search_min_chars ) ) {
+				wp_die();
+			}
+
+			$args['name__like'] = $s;
 		}
 
-		$results = get_multisite_terms(
-			array(
-				'taxonomy'   => $taxonomy,
-				'name__like' => $s,
-				'fields'     => 'names',
-				'hide_empty' => false,
-			)
-		);
+		$results = get_multisite_terms( $args );
 
 		echo implode( "\n", $results ); // phpcs:ignore WordPress.Security.EscapeOutput
 		wp_die();
@@ -598,7 +632,6 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return mixed Void if successful or post_id if not.
 	 */
 	public function save_multisite_taxonomy( int $obj_id ) {
-
 		/*
 		* We need to verify this came from the our screen and with proper authorization,
 		* because save_post can be triggered at other times.
@@ -761,5 +794,4 @@ class Multisite_Taxonomy_Meta_Box {
 			}
 		}
 	}
-
 }

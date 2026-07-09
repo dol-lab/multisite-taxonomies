@@ -134,6 +134,42 @@ ul.hierarchical-term-checklist li {
     word-wrap: break-word;
 }
 
+/* Collapsible nested terms. */
+ul.hierarchical-term-checklist ul.children.mtax-collapsed {
+    display: none;
+}
+
+.hierarchical-term-checklist .mtax-term-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: none;
+    color: #787c82;
+    cursor: pointer;
+    vertical-align: top;
+}
+
+.hierarchical-term-checklist .mtax-toggle-indicator:before {
+    content: "\f345"; /* dashicons-arrow-right-alt2 */
+    font: normal 20px/1 dashicons;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.hierarchical-term-checklist li.mtax-expanded > .mtax-term-toggle .mtax-toggle-indicator:before {
+    content: "\f347"; /* dashicons-arrow-down-alt2 */
+}
+
+/* Keep leaf-term labels aligned with the labels of sibling parent terms. */
+.hierarchical-term-checklist li:not(.has-children) > label {
+    margin-left: 20px;
+}
+
 #poststuff .inside .the-multisite-terms-cloud {
     margin: 5px 0 10px;
     padding: 8px;

@@ -69,6 +69,10 @@ class Multitaxo_Plugin {
 		// Run schema migrations for installs predating the current DB version.
 		add_action( 'init', array( __CLASS__, 'maybe_upgrade_database' ), 2 );
 
+		// Signal consumers to register their taxonomies in exactly the CRUD contexts
+		// (network admin, WP-CLI, term-CRUD ajax), so none has to re-derive the gate itself.
+		add_action( 'init', array( $this, 'fire_register_signal' ), 5 );
+
 		// register the ajax response for creating new tags.
 		add_action( 'wp_ajax_add-multisite-tag', array( $this, 'ajax_add_multisite_tag' ) );
 		add_action( 'wp_ajax_inline-save-multisite-tax', array( $this, 'ajax_inline_save_multisite_tag' ) );
@@ -76,11 +80,134 @@ class Multitaxo_Plugin {
 		// register action hooks for specific actions.
 		add_action( 'before_delete_post', array( $this, 'before_delete_post_action_hook' ) );
 
+		// A deleted site drops its wp_<id>_posts table directly, without firing
+		// before_delete_post per post, so purge that blog's relationship rows here.
+		add_action( 'wp_delete_site', array( $this, 'delete_site_action_hook' ) );
+
 		// Filter the native network Users / Sites lists to a single multisite term when linked from
 		// the term list table's count column.
 		add_action( 'pre_get_users', array( $this, 'filter_network_users_by_multisite_term' ) );
 		add_action( 'pre_get_sites', array( $this, 'filter_network_sites_by_multisite_term' ) );
 		add_action( 'network_admin_notices', array( $this, 'multisite_term_filter_notice' ) );
+	}
+
+	/**
+	 * Fire the `multisite_taxonomies_register` action in CRUD contexts.
+	 *
+	 * Taxonomies whose only UI is the network term screens do not need to register on every
+	 * front-end request. The trap is that "register in the network admin" is not enough: the
+	 * add/inline-edit screens submit over admin-ajax.php, where is_network_admin() is false.
+	 * Hooking this action (instead of re-deriving the context) registers a taxonomy in exactly
+	 * the requests where its screens and ajax handlers run, and nowhere else.
+	 *
+	 * @return void
+	 */
+	public function fire_register_signal() {
+		if ( self::is_crud_request() ) {
+			/**
+			 * Fires on init in every request where multisite-taxonomy CRUD operates:
+			 * the network admin, WP-CLI, or one of this plugin's term-CRUD ajax actions.
+			 * Register multisite taxonomies here to have them available for every screen and
+			 * ajax handler without gating on is_network_admin() yourself.
+			 */
+			do_action( 'multisite_taxonomies_register' );
+		}
+	}
+
+	/**
+	 * Whether the current request is one where multisite-taxonomy CRUD screens operate:
+	 * the network admin, WP-CLI, or one of this plugin's own term-CRUD ajax actions.
+	 *
+	 * Exposed so consumers that prefer to register on their own `init` hook can share this
+	 * single definition of the CRUD context instead of duplicating the is_network_admin()
+	 * / wp_doing_ajax() checks (which is exactly where the "invalid taxonomy" bug came from).
+	 *
+	 * @return bool
+	 */
+	public static function is_crud_request() {
+		if ( is_network_admin() ) {
+			return true;
+		}
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return true;
+		}
+		if ( wp_doing_ajax() ) {
+			// The ajax action is the router key, not user data; each handler verifies its own nonce.
+			$action = isset( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return in_array( $action, self::ajax_crud_actions(), true );
+		}
+		return false;
+	}
+
+	/**
+	 * The plugin's own ajax action names that operate on terms and therefore need the taxonomy
+	 * registered. Covers both the term-CRUD writes and the term-box reads (autocomplete search
+	 * and the "most used" cloud), which resolve the taxonomy via get_multisite_taxonomy() and
+	 * otherwise bail with a bare `0`. Kept next to the wp_ajax_* registrations in the constructor.
+	 *
+	 * @return string[]
+	 */
+	private static function ajax_crud_actions() {
+		return array(
+			'add-multisite-tag',
+			'inline-save-multisite-tax',
+			'ajax-multisite-tag-search',
+			'ajax-get-multisite-term-cloud',
+		);
+	}
+
+	/**
+	 * A human- and developer-readable "invalid taxonomy" message.
+	 *
+	 * Names the slug, says whether it is registered at all, and reports the request context,
+	 * so the usual cause (a taxonomy that registers only in the network admin but not during
+	 * its CRUD ajax) is self-evident instead of a bare "Invalid multisite taxonomy."
+	 *
+	 * @param string|null $taxonomy The requested taxonomy slug.
+	 * @return string
+	 */
+	public static function invalid_taxonomy_message( $taxonomy ) {
+		$taxonomy = (string) $taxonomy;
+
+		if ( '' === $taxonomy ) {
+			return __( 'No multisite taxonomy was specified.', 'multitaxo' );
+		}
+
+		if ( multisite_taxonomy_exists( $taxonomy ) ) {
+			/* translators: %s: taxonomy slug. */
+			return sprintf( __( 'The multisite taxonomy "%s" exists but is not available in this context.', 'multitaxo' ), $taxonomy );
+		}
+
+		$registered = array_keys( (array) $GLOBALS['multisite_taxonomies'] );
+
+		return sprintf(
+			/* translators: 1: requested taxonomy slug, 2: request-context flags, 3: comma-separated registered slugs. */
+			__( 'The multisite taxonomy "%1$s" is not registered for this request (%2$s). Registered here: %3$s. A taxonomy that registers only in the network admin must also register during its CRUD ajax actions — hook the multisite_taxonomies_register action, or gate on Multitaxo_Plugin::is_crud_request().', 'multitaxo' ),
+			$taxonomy,
+			sprintf( 'doing_ajax=%d, network_admin=%d', (int) wp_doing_ajax(), (int) is_network_admin() ),
+			$registered ? implode( ', ', $registered ) : __( '(none)', 'multitaxo' )
+		);
+	}
+
+	/**
+	 * Send a descriptive invalid-taxonomy error as a WP_Ajax_Response and stop.
+	 *
+	 * Ajax endpoints must never wp_die() raw text: the term screens' JS expects the XML
+	 * wp_ajax envelope, so a bare die produces an unparseable body that the UI swallows.
+	 * This surfaces the reason in #ajax-response instead.
+	 *
+	 * @param string|null $taxonomy The requested taxonomy slug.
+	 * @return void Never returns; WP_Ajax_Response::send() exits.
+	 */
+	private function send_invalid_taxonomy_ajax_error( $taxonomy ) {
+		$response = new WP_Ajax_Response();
+		$response->add(
+			array(
+				'what' => 'multisite_taxonomy',
+				'data' => new WP_Error( 'invalid_multisite_taxonomy', self::invalid_taxonomy_message( $taxonomy ) ),
+			)
+		);
+		$response->send();
 	}
 
 	/**
@@ -447,25 +574,71 @@ class Multitaxo_Plugin {
 			return;
 		}
 
-		$installed = (int) get_site_option( 'multitaxo_db_version', 0 );
-		if ( $installed >= self::DB_VERSION ) {
+		if ( (int) get_site_option( 'multitaxo_db_version', 0 ) >= self::DB_VERSION ) {
 			return;
 		}
 
-		// v2: add the `object_type` column to the relationships table and append it to the PK.
-		if ( $installed < 2 ) {
-			$table        = $wpdb->multisite_term_relationships;
-			$has_column   = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $table . '` LIKE %s', 'object_type' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			if ( empty( $has_column ) ) {
-				// Add the column; all existing rows default to '' (the post namespace).
-				$wpdb->query( 'ALTER TABLE `' . $table . '` ADD COLUMN object_type varchar(20) NOT NULL DEFAULT "" AFTER multisite_term_order' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
-				// Rebuild the PK with object_type appended. Safe: every existing row is '',
-				// so the new key stays unique, and the leftmost prefix is preserved.
-				$wpdb->query( 'ALTER TABLE `' . $table . '` DROP PRIMARY KEY, ADD PRIMARY KEY (blog_id,object_id,multisite_term_multisite_taxonomy_id,object_type)' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
-			}
+		// The migration runs on `init` for every request, so concurrent PHP workers can race:
+		// each passes the version/column check before any commits its ALTER, and the losers hit
+		// "Duplicate column name". Serialize with a MySQL advisory lock so exactly one worker
+		// migrates; the others bail immediately and pick up the bumped version on a later request.
+		if ( '1' !== (string) $wpdb->get_var( "SELECT GET_LOCK('multitaxo_upgrade', 0)" ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+			return;
 		}
 
-		update_site_option( 'multitaxo_db_version', self::DB_VERSION );
+		try {
+			// Re-read inside the lock: a prior holder may have finished the upgrade already.
+			$installed = (int) get_site_option( 'multitaxo_db_version', 0 );
+			if ( $installed >= self::DB_VERSION ) {
+				return;
+			}
+
+			// Each step must fully succeed before we record the new version; a failed step
+			// leaves multitaxo_db_version untouched so a later request retries it, rather than
+			// marking a broken schema as "done".
+			if ( $installed < 2 && ! self::upgrade_relationships_object_type( $wpdb ) ) {
+				return;
+			}
+
+			update_site_option( 'multitaxo_db_version', self::DB_VERSION );
+		} finally {
+			$wpdb->query( "SELECT RELEASE_LOCK('multitaxo_upgrade')" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+		}
+	}
+
+	/**
+	 * v2 migration: give the relationships table an `object_type` column and fold it into the PK.
+	 *
+	 * Idempotent and fail-safe. The column and the primary-key rebuild are checked and applied
+	 * independently, so a partial upgrade (column added, PK not yet rebuilt, e.g. after a crash
+	 * or a failed DDL statement) is completed on the next run instead of being skipped. Any DB
+	 * error aborts with false so the caller does not record the upgrade as complete.
+	 *
+	 * @param wpdb $wpdb The WordPress database abstraction object.
+	 * @return bool True when the table matches the v2 schema, false if a step failed.
+	 */
+	private static function upgrade_relationships_object_type( $wpdb ) {
+		$table = $wpdb->multisite_term_relationships;
+
+		// Add the column; all existing rows default to '' (the post namespace).
+		$has_column = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $table . '` LIKE %s', 'object_type' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( empty( $has_column )
+			&& false === $wpdb->query( 'ALTER TABLE `' . $table . '` ADD COLUMN object_type varchar(20) NOT NULL DEFAULT "" AFTER multisite_term_order' ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+		) {
+			return false;
+		}
+
+		// Rebuild the PK with object_type appended, independently of the column step so a
+		// half-applied upgrade still completes on retry. Safe: every existing row has object_type
+		// '', so the new key stays unique and its leftmost prefix matches the old PK.
+		$pk_has_object_type = $wpdb->get_var( $wpdb->prepare( 'SHOW KEYS FROM `' . $table . "` WHERE Key_name = 'PRIMARY' AND Column_name = %s", 'object_type' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( empty( $pk_has_object_type )
+			&& false === $wpdb->query( 'ALTER TABLE `' . $table . '` DROP PRIMARY KEY, ADD PRIMARY KEY (blog_id,object_id,multisite_term_multisite_taxonomy_id,object_type)' ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+		) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -627,8 +800,8 @@ class Multitaxo_Plugin {
 
 		switch ( $this->list_table->current_action() ) {
 
-			case 'add-tag':
-				check_admin_referer( 'add-multisite-tag', '_wpnonce_add-multisite-tag' );
+			case 'add-multisite-tag':
+				check_admin_referer( 'add-multisite-tag', 'nonce-add-multisite-tag' );
 
 				if ( ! current_user_can( $mulsite_taxonomy->cap->edit_multisite_terms ) ) {
 					wp_die(
@@ -638,11 +811,12 @@ class Multitaxo_Plugin {
 					);
 				}
 
+				$tag = null;
 				if ( isset( $_POST['tag-name'] ) ) {
-					$tag = insert_multisite_term( sanitize_text_field( wp_unslash( $_POST['tag-name'] ) ), $tax->name, $_POST );
+					$tag = insert_multisite_term( sanitize_text_field( wp_unslash( $_POST['tag-name'] ) ), $mulsite_taxonomy->name, $_POST );
 				}
 
-				if ( $ret && ! is_wp_error( $ret ) ) {
+				if ( $tag && ! is_wp_error( $tag ) ) {
 					$location = add_query_arg( 'message', 1, $referer );
 				} else {
 					$location = add_query_arg(
@@ -815,12 +989,11 @@ class Multitaxo_Plugin {
 
 		$taxonomy = ( ! empty( sanitize_key( wp_unslash( $_POST['multisite_taxonomy'] ) ) ) ) ? sanitize_key( wp_unslash( $_POST['multisite_taxonomy'] ) ) : null;
 
-		if ( empty( $taxonomy ) ) {
-			esc_html_e( 'Invalid multisite taxonomy. -2', 'multitaxo' );
-			die();
-		}
-
 		$tax = get_multisite_taxonomy( $taxonomy );
+
+		if ( ! $tax instanceof Multisite_Taxonomy ) {
+			$this->send_invalid_taxonomy_ajax_error( $taxonomy );
+		}
 
 		if ( ! current_user_can( $tax->cap->manage_multisite_terms ) ) {
 			wp_die( -1 );
@@ -878,9 +1051,16 @@ class Multitaxo_Plugin {
 			$args['screen']->taxonomy = $taxonomy;
 		}
 
-		$tax_list_table = new Multisite_Terms_List_Table( $args );
+		try {
+			$tax_list_table = new Multisite_Terms_List_Table( $args );
+		} catch ( InvalidArgumentException $e ) {
+			// The term was created above; only the response-row rendering could not resolve
+			// its screen. Report it structurally rather than dumping a raw wp_die into the XML.
+			$this->send_invalid_taxonomy_ajax_error( $taxonomy );
+		}
 
-		$level = 0;
+		$level     = 0;
+		$noparents = ''; // Only hierarchical taxonomies render a "no parents" row; keep compact() below defined.
 
 		if ( is_multisite_taxonomy_hierarchical( $taxonomy ) ) {
 			$level = count( get_ancestors( $tag->term_id, $taxonomy, 'taxonomy' ) );
@@ -925,7 +1105,14 @@ class Multitaxo_Plugin {
 
 		$tax = get_multisite_taxonomy( $taxonomy );
 
-		if ( ! $tax ) {
+		if ( ! $tax instanceof Multisite_Taxonomy ) {
+			// Inline edit expects a bare status body, but log the reason for the developer.
+			$reason = self::invalid_taxonomy_message( $taxonomy );
+			if ( function_exists( 'spaces_log' ) ) {
+				spaces_log( 'error', $reason, array( '_source' => __METHOD__ ) );
+			} else {
+				error_log( 'multisite_taxonomies: ' . $reason ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			}
 			wp_die( 0 );
 		}
 
@@ -953,7 +1140,11 @@ class Multitaxo_Plugin {
 			$args['screen']->taxonomy = $taxonomy;
 		}
 
-		$tax_list_table = new Multisite_Terms_List_Table( $args );
+		try {
+			$tax_list_table = new Multisite_Terms_List_Table( $args );
+		} catch ( InvalidArgumentException $e ) {
+			wp_die( 0 );
+		}
 
 		$tag                  = get_multisite_term( $id, $taxonomy );
 		$_POST['description'] = $tag->description;
@@ -1306,7 +1497,7 @@ class Multitaxo_Plugin {
 
 		<div class="form-wrap">
 		<h2><?php echo esc_html( $tax->labels->add_new_item ); ?></h2>
-		<form id="addtag" method="post" action="admin.php" class="validate"
+		<form id="addtag" method="post" action="admin.php?page=<?php echo esc_attr( 'multisite_term_list_' . $tax->name ); ?>" class="validate"
 			<?php
 			/**
 			 * Fires inside the Add Tag form tag.
@@ -1764,6 +1955,75 @@ class Multitaxo_Plugin {
 		if ( is_a( $post, 'WP_Post' ) ) {
 			// When a post is deleted we want tp delete the multisite term relationships to avoid orphans records.
 			delete_object_multisite_term_relationships( $post_id, get_object_multisite_taxonomies( $post ), get_current_blog_id() );
+		}
+	}
+
+	/**
+	 * Purge a deleted site's rows from the network-global relationships table.
+	 *
+	 * Post relationships are keyed by `blog_id`, but deleting a whole site drops its
+	 * `wp_<id>_posts` table directly without firing `before_delete_post` per post, so
+	 * those rows would otherwise be orphaned and the affected term counts left inflated.
+	 * User- and blog-namespace rows are network-global (blog_id 0) and unaffected.
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param WP_Site $old_site The site being deleted.
+	 * @return void
+	 */
+	public function delete_site_action_hook( $old_site ) {
+		global $wpdb;
+
+		$blog_id = is_a( $old_site, 'WP_Site' ) ? (int) $old_site->blog_id : 0;
+
+		if ( $blog_id <= 0 ) {
+			return;
+		}
+
+		// Capture the affected term/taxonomy rows before the delete so counts can be
+		// recalculated afterwards, grouped by taxonomy to honour any update_count_callback.
+		$affected = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT DISTINCT tt.multisite_term_multisite_taxonomy_id AS mtmt_id, tt.multisite_taxonomy AS taxonomy
+				FROM {$wpdb->multisite_term_relationships} AS tr
+				INNER JOIN {$wpdb->multisite_term_multisite_taxonomy} AS tt
+					ON tt.multisite_term_multisite_taxonomy_id = tr.multisite_term_multisite_taxonomy_id
+				WHERE tr.blog_id = %d",
+				$blog_id
+			)
+		); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$deleted = $wpdb->delete( $wpdb->multisite_term_relationships, array( 'blog_id' => $blog_id ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		if ( false === $deleted ) {
+			$reason = sprintf( 'failed to delete term relationships for deleted blog %d: %s', $blog_id, $wpdb->last_error );
+			if ( function_exists( 'spaces_log' ) ) {
+				spaces_log( 'error', $reason, array( '_source' => __METHOD__ ) );
+			} else {
+				error_log( 'multisite_taxonomies: ' . $reason ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			}
+			return;
+		}
+
+		if ( empty( $affected ) ) {
+			return;
+		}
+
+		wp_cache_delete( 'last_changed', 'multisite_terms' );
+
+		// Group the orphaned term IDs by taxonomy, then recount each.
+		$by_taxonomy = array();
+		foreach ( $affected as $row ) {
+			$by_taxonomy[ $row->taxonomy ][] = (int) $row->mtmt_id;
+		}
+
+		foreach ( $by_taxonomy as $taxonomy => $mtmt_ids ) {
+			// A taxonomy that is not registered in this request cannot be recounted; the
+			// rows are already gone, so leave the (now stale) count for a later resync.
+			if ( ! multisite_taxonomy_exists( $taxonomy ) ) {
+				continue;
+			}
+			update_multisite_term_count( $mtmt_ids, $taxonomy );
 		}
 	}
 }

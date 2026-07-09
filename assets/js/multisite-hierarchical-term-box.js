@@ -111,4 +111,40 @@ jQuery(document).ready(function( $ ) {
 
 	}); // end cats
 
+	// Make nested terms collapsible. Collapsed by default, but any branch that
+	// contains a checked/selected term is expanded so the selection stays visible.
+	$( '.hierarchical-term-checklist' ).each( function() {
+		var $list = $( this );
+
+		function setExpanded( $li, expanded ) {
+			$li.toggleClass( 'mtax-expanded', expanded );
+			$li.children( '.mtax-term-toggle' ).attr( 'aria-expanded', expanded ? 'true' : 'false' );
+			$li.children( 'ul.children' ).toggleClass( 'mtax-collapsed', ! expanded );
+		}
+
+		// Tag every parent term and give it a toggle, then collapse it.
+		$list.find( 'li' ).filter( function() {
+			return $( this ).children( 'ul.children' ).length > 0;
+		} ).each( function() {
+			var $li = $( this );
+			$li.addClass( 'has-children' );
+			$li.prepend( '<button type="button" class="mtax-term-toggle" aria-expanded="false"><span class="mtax-toggle-indicator" aria-hidden="true"></span></button>' );
+			setExpanded( $li, false );
+		} );
+
+		// Toggle on click.
+		$list.on( 'click', '.mtax-term-toggle', function( e ) {
+			e.preventDefault();
+			var $li = $( this ).closest( 'li' );
+			setExpanded( $li, ! $li.hasClass( 'mtax-expanded' ) );
+		} );
+
+		// Reveal branches holding a checked (checkbox) or selected (list_only) term.
+		$list.find( 'input[type="checkbox"]:checked, .category.selected' ).each( function() {
+			$( this ).parentsUntil( $list, 'li.has-children' ).each( function() {
+				setExpanded( $( this ), true );
+			} );
+		} );
+	} );
+
 }); // end Jquery
