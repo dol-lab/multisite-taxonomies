@@ -422,8 +422,8 @@ class Multisite_Taxonomy_Archive {
 		// A single tax_query clause aliases the relationship table to its full name. Scope the
 		// match to the requested namespace: posts ('') live on this blog, user/blog rows are
 		// network-global (blog_id 0).
-		$rel     = $wpdb->multisite_term_relationships;
-		$blog_id = multisite_relationship_blog_id( $this->object_type, get_current_blog_id() );
+		$rel               = $wpdb->multisite_term_relationships;
+		$blog_id           = multisite_relationship_blog_id( $this->object_type, get_current_blog_id() );
 		$clauses['where'] .= $wpdb->prepare( " AND $rel.object_type = %s AND $rel.blog_id = %d", $this->object_type, $blog_id );
 
 		return $clauses;
@@ -608,58 +608,4 @@ class Multisite_Taxonomy_Archive {
 	public function get_paged() {
 		return $this->paged;
 	}
-}
-
-/**
- * Whether the current request is a multisite taxonomy term archive.
- *
- * @return bool
- */
-function is_multisite_taxonomy_archive() {
-	$controller = Multitaxo_Plugin::get_archive_controller();
-	return $controller ? $controller->is_archive() : false;
-}
-
-/**
- * The multisite term whose archive is currently being rendered, or null.
- *
- * @return Multisite_Term|null
- */
-function get_queried_multisite_term() {
-	$controller = Multitaxo_Plugin::get_archive_controller();
-	return $controller ? $controller->get_queried_term() : null;
-}
-
-/**
- * ID namespace of the current multisite taxonomy archive: '' (posts), 'user', or 'blog'.
- *
- * @return string
- */
-function get_queried_multisite_object_type() {
-	$controller = Multitaxo_Plugin::get_archive_controller();
-	return $controller ? $controller->get_object_type() : '';
-}
-
-/**
- * Whether the current request is a multisite taxonomy archive of users or sites (not posts).
- *
- * @return bool
- */
-function is_multisite_taxonomy_object_archive() {
-	$controller = Multitaxo_Plugin::get_archive_controller();
-	return $controller && $controller->is_archive() && '' !== $controller->get_object_type();
-}
-
-/**
- * The WP_User / WP_Site objects on the current page of a users/sites term archive.
- *
- * Returns an empty array on a posts archive or outside an archive, so a template can loop it
- * unconditionally. Pagination state lives on the main $wp_query (see filter_the_posts()), so the
- * usual the_posts_pagination() works.
- *
- * @return array WP_User[] or WP_Site[].
- */
-function get_multisite_taxonomy_archive_objects() {
-	$controller = Multitaxo_Plugin::get_archive_controller();
-	return $controller ? $controller->get_objects() : array();
 }

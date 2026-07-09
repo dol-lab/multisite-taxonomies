@@ -1,6 +1,11 @@
 <?xml version="1.0"?>
 <ruleset name="HSPH WordPress Coding Standards">
-    <config name="installed_paths" value="vendor/wp-coding-standards/wpcs"/>
+    <!-- installed_paths is registered automatically by dealerdirect/phpcodesniffer-composer-installer
+         (WPCS 3.x additionally requires PHPCSUtils and PHPCSExtra). -->
+    <file>inc</file>
+    <file>tests</file>
+    <file>templates</file>
+    <file>multisite-taxonomies.php</file>
     <exclude-pattern>*/vendor/*</exclude-pattern>
     <exclude-pattern>*/assets/*</exclude-pattern>
     <arg name="extensions" value="php"/>
@@ -12,12 +17,27 @@
     </rule>
     <rule ref="WordPress.WP.I18n">
         <properties>
-            <property name="text_domain" type="array" value="multitaxo" />
+            <property name="text_domain" type="array">
+                <element value="multitaxo" />
+            </property>
         </properties>
     </rule>
     <rule ref="WordPress.WP.DeprecatedFunctions">
         <properties>
-            <property name="minimum_supported_version" value="4.7" />
+            <property name="minimum_wp_version" value="4.7" />
+        </properties>
+    </rule>
+    <!-- Custom capabilities registered by this plugin (mapped via map_meta_cap). -->
+    <rule ref="WordPress.WP.Capabilities">
+        <properties>
+            <property name="custom_capabilities" type="array">
+                <element value="manage_multisite_terms" />
+                <element value="edit_multisite_terms" />
+                <element value="edit_multisite_term" />
+                <element value="delete_multisite_terms" />
+                <element value="delete_multisite_term" />
+                <element value="assign_multisite_terms" />
+            </property>
         </properties>
     </rule>
     <rule ref="WordPress.Files.FileName">

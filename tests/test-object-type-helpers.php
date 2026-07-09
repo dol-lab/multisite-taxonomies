@@ -9,6 +9,9 @@
  * @package multitaxo
  */
 
+/**
+ * Unit tests for the object_type namespace helper functions.
+ */
 class Test_Object_Type_Helpers extends WP_UnitTestCase {
 
 	/**
@@ -44,7 +47,7 @@ class Test_Object_Type_Helpers extends WP_UnitTestCase {
 	}
 
 	/**
-	 * supports_object_type() reflects exactly the namespaces a taxonomy was registered for.
+	 * The supports_object_type() helper reflects exactly the namespaces a taxonomy was registered for.
 	 */
 	public function test_supports_object_type_matches_registration() {
 		register_multisite_taxonomy( 'helper_multi_tax', array( 'post', 'user', 'blog' ), array() );

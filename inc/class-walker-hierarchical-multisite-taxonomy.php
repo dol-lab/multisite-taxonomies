@@ -229,5 +229,4 @@ class Walker_Hierarchical_Multisite_Taxonomy extends Walker {
 
 		$output .= "</li>\n";
 	}
-
 }

@@ -297,10 +297,10 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 	 * @param int    $start The start arg for pagination.
 	 * @param int    $per_page The num,ber of terms per page.
 	 * @param int    $count How many total terms do we have.
-	 * @param int    $parent The parent taxonomy.
+	 * @param int    $parent_term The parent taxonomy.
 	 * @param int    $level The current level of hierarchy.
 	 */
-	private function _rows( $multisite_taxonomy, $multisite_terms, &$children, $start, $per_page, &$count, $parent = 0, $level = 0 ) { // phpcs:ignore Generic,PSR2
+	private function _rows( $multisite_taxonomy, $multisite_terms, &$children, $start, $per_page, &$count, $parent_term = 0, $level = 0 ) { // phpcs:ignore Generic,PSR2
 
 		$end = $start + $per_page;
 
@@ -310,7 +310,7 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 				break;
 			}
 
-			if ( $multisite_term->parent !== $parent && empty( $_REQUEST['s'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			if ( $multisite_term->parent !== $parent_term && empty( $_REQUEST['s'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 				continue;
 			}
 
@@ -335,7 +335,7 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 					$my_parent = array_pop( $my_parents );
 					echo "\t";
 					$this->single_row( $my_parent, $level - $num_parents );
-					$num_parents--;
+					--$num_parents;
 				}
 			}
 
@@ -416,10 +416,10 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 
 		if ( wp_doing_ajax() ) {
 			$uri = wp_get_referer();
-		} else {
-			if ( isset( $_SERVER['REQUEST_URI'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+		} elseif ( isset( $_SERVER['REQUEST_URI'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification
 				$uri = $_SERVER['REQUEST_URI']; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-			}
+
 		}
 
 		$edit_link = add_query_arg(
@@ -476,10 +476,10 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 		$mu_tax             = get_multisite_taxonomy( $multisite_taxonomy );
 		if ( wp_doing_ajax() ) {
 			$uri = wp_get_referer();
-		} else {
-			if ( isset( $_SERVER['REQUEST_URI'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+		} elseif ( isset( $_SERVER['REQUEST_URI'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification
 				$uri = $_SERVER['REQUEST_URI']; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-			}
+
 		}
 
 		$edit_link = add_query_arg(
@@ -604,7 +604,7 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 		$parts   = array();
 		foreach ( $icons as $namespace => $meta ) {
 			if ( ! empty( $by_type[ $namespace ] ) ) {
-				$inner    = $meta[0] . ' ' . number_format_i18n( count( $by_type[ $namespace ] ) );
+				$inner   = $meta[0] . ' ' . number_format_i18n( count( $by_type[ $namespace ] ) );
 				$parts[] = '<a href="' . esc_url( $meta[2] ) . '" title="' . esc_attr( $meta[1] ) . '">' . $inner . '</a>';
 			}
 		}

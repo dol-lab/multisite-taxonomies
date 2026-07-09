@@ -9,6 +9,9 @@
  * @package multitaxo
  */
 
+/**
+ * Tests for the paginated per-namespace object-id reader.
+ */
 class Test_Archive_Object_Ids extends WP_UnitTestCase {
 
 	/**
@@ -18,6 +21,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 	 */
 	private $tax = 'aff_archive_tax';
 
+	/**
+	 * Register a fresh taxonomy spanning all three namespaces before each test.
+	 */
 	public function set_up() {
 		parent::set_up();
 		register_multisite_taxonomy( $this->tax, array( 'post', 'user', 'blog' ), array( 'hierarchical' => true ) );
@@ -25,6 +31,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 
 	/**
 	 * Create a term and return its multisite_term_id.
+	 *
+	 * @param string $name Term name.
+	 * @return int The multisite_term_id of the created term.
 	 */
 	private function make_term( string $name ): int {
 		$res = insert_multisite_term( $name, $this->tax, array(), false );
@@ -32,6 +41,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 		return (int) $res['multisite_term_id'];
 	}
 
+	/**
+	 * The total counts every assignment while each page returns its slice, ordered by object_id.
+	 */
 	public function test_total_and_page_slice_for_users() {
 		$term_id = $this->make_term( 'Users Archive' );
 
@@ -72,6 +84,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 		$this->assertSame( array_slice( $user_ids, 4, 2 ), $page3['ids'], 'the final page holds the remainder' );
 	}
 
+	/**
+	 * A number of 0 (the default) returns every assigned id rather than a page.
+	 */
 	public function test_number_zero_returns_all() {
 		$term_id = $this->make_term( 'All Users' );
 		for ( $i = 0; $i < 3; $i++ ) {
@@ -83,6 +98,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 		$this->assertCount( 3, $all['ids'], 'number 0 (default) returns every id' );
 	}
 
+	/**
+	 * A query for one namespace never returns ids stored under another.
+	 */
 	public function test_namespaces_do_not_bleed() {
 		$term_id = $this->make_term( 'Mixed Namespaces' );
 
@@ -100,6 +118,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 		$this->assertSame( 1, $blogs['total'] );
 	}
 
+	/**
+	 * Passing an array of term ids unions their objects and counts each object once.
+	 */
 	public function test_array_of_term_ids_unions_and_dedupes() {
 		$parent = $this->make_term( 'Parent' );
 		$child  = $this->make_term( 'Child' );
@@ -115,6 +136,9 @@ class Test_Archive_Object_Ids extends WP_UnitTestCase {
 		$this->assertSame( array( $shared, $only ), $rolled['ids'] );
 	}
 
+	/**
+	 * An unused term and an unknown taxonomy both yield an empty, zero-total result.
+	 */
 	public function test_empty_term_and_unknown_taxonomy() {
 		$term_id = $this->make_term( 'Empty' );
 

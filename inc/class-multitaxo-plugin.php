@@ -493,7 +493,6 @@ class Multitaxo_Plugin {
 			KEY meta_key (meta_key(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		// dbDelta( $multisite_termmeta_sql );
 		$wpdb->query( $multisite_termmeta_sql );
 
 		// Table structure for table `wp_multisite_terms`.
@@ -507,18 +506,16 @@ class Multitaxo_Plugin {
 			KEY name (name(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		// dbDelta( $multisite_terms_sql );
 		$wpdb->query( $multisite_terms_sql );
 
 		// Table structure for table `wp_multisite_term_relationships`.
-		/*
-		 * `object_type` records the ID namespace of `object_id`:
-		 *   ''      => post namespace (post, page, any CPT) -- default and legacy value
-		 *   'user'  => wp_users
-		 *   'blog'  => wp_blogs
-		 * Posts are always stored as '' (never the literal 'post'), so the three values
-		 * stay distinct and a single taxonomy can safely span object types. See plan.md.
-		 */
+		//
+		// `object_type` records the ID namespace of `object_id`:
+		// - '' (empty) => post namespace (post, page, any CPT), the default and legacy value.
+		// - 'user' => wp_users.
+		// - 'blog' => wp_blogs.
+		// Posts are always stored as '' (never the literal 'post'), so the three values
+		// stay distinct and a single taxonomy can safely span object types. See plan.md.
 		$multisite_term_relationships_sql = 'CREATE TABLE IF NOT EXISTS `' . $wpdb->multisite_term_relationships . '` (
 			blog_id bigint(20) unsigned NOT NULL default 0,
 			object_id bigint(20) unsigned NOT NULL default 0,
@@ -529,7 +526,6 @@ class Multitaxo_Plugin {
 			KEY multisite_term_multisite_taxonomy_id (multisite_term_multisite_taxonomy_id)
 		) ' . $charset_collate . ';';
 
-		// dbDelta( $multisite_term_relationships_sql );
 		$wpdb->query( $multisite_term_relationships_sql );
 
 		// Table structure for table `wp_multisite_term_multisite_taxonomy`.
@@ -545,14 +541,12 @@ class Multitaxo_Plugin {
 			KEY multisite_taxonomy (multisite_taxonomy)
 		) ' . $charset_collate . ';';
 
-		// dbDelta( $multisite_term_multisite_taxonomy_sql );
 		$wpdb->query( $multisite_term_multisite_taxonomy_sql );
 
 		update_site_option( 'multitaxo_tables_created', 1 );
 
 		// Fresh installs already have the latest schema, so record the current DB version.
 		update_site_option( 'multitaxo_db_version', self::DB_VERSION );
-
 	}
 
 	/**
@@ -607,7 +601,7 @@ class Multitaxo_Plugin {
 	}
 
 	/**
-	 * v2 migration: give the relationships table an `object_type` column and fold it into the PK.
+	 * Migration to schema v2: give the relationships table an `object_type` column and fold it into the PK.
 	 *
 	 * Idempotent and fail-safe. The column and the primary-key rebuild are checked and applied
 	 * independently, so a partial upgrade (column added, PK not yet rebuilt, e.g. after a crash
@@ -677,6 +671,11 @@ class Multitaxo_Plugin {
 		);
 	}
 
+	/**
+	 * Register the network-admin "Taxonomies" menu and its per-taxonomy submenus.
+	 *
+	 * @return void
+	 */
 	public function add_network_menu_terms() {
 		$screen = add_menu_page( esc_html__( 'Multisite Taxonomies', 'multitaxo' ), esc_html__( 'Taxonomies', 'multitaxo' ), 'manage_multisite_terms', 'multisite_term_list', array( $this, 'display_multisite_taxonomy_list' ), 'dashicons-tag', 22 );
 
@@ -1170,7 +1169,7 @@ class Multitaxo_Plugin {
 		while ( $parent > 0 ) {
 			$parent_tag = get_multisite_term( $parent, $taxonomy );
 			$parent     = $parent_tag->parent;
-			$level++;
+			++$level;
 		}
 		$tax_list_table->single_row( $tag, $level );
 		wp_die();

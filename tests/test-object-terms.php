@@ -10,6 +10,9 @@
  * @package multitaxo
  */
 
+/**
+ * Namespace-aware object term relationship tests.
+ */
 class Test_Object_Terms extends WP_UnitTestCase {
 
 	/**
@@ -26,6 +29,9 @@ class Test_Object_Terms extends WP_UnitTestCase {
 	 */
 	private $rel;
 
+	/**
+	 * Register a fresh taxonomy spanning all three namespaces before each test.
+	 */
 	public function set_up() {
 		parent::set_up();
 		global $wpdb;
@@ -35,6 +41,9 @@ class Test_Object_Terms extends WP_UnitTestCase {
 
 	/**
 	 * Create a term and return its multisite_term_multisite_taxonomy_id.
+	 *
+	 * @param string $name Term name.
+	 * @return int The multisite_term_multisite_taxonomy_id of the created term.
 	 */
 	private function make_term( string $name ): int {
 		$res = insert_multisite_term( $name, $this->tax, array(), false );
@@ -44,6 +53,11 @@ class Test_Object_Terms extends WP_UnitTestCase {
 
 	/**
 	 * Read the stored (blog_id, object_type) for a relationship row, or null if absent.
+	 *
+	 * @param int    $object_id   Object id the term is assigned to.
+	 * @param int    $mtmt_id     multisite_term_multisite_taxonomy_id of the term.
+	 * @param string $object_type Namespace of the relationship ('user', 'blog' or '').
+	 * @return object|null Row with blog_id and object_type, or null when absent.
 	 */
 	private function stored_row( int $object_id, int $mtmt_id, string $object_type ) {
 		global $wpdb;
@@ -59,6 +73,9 @@ class Test_Object_Terms extends WP_UnitTestCase {
 		);
 	}
 
+	/**
+	 * User assignments are stored network-globally at blog_id 0 with object_type 'user'.
+	 */
 	public function test_user_assignment_is_network_global() {
 		$mtmt    = $this->make_term( 'User Term' );
 		$user_id = $this->factory()->user->create();
@@ -72,6 +89,9 @@ class Test_Object_Terms extends WP_UnitTestCase {
 		$this->assertSame( 'user', $row->object_type );
 	}
 
+	/**
+	 * Blog assignments are stored network-globally at blog_id 0 with object_type 'blog'.
+	 */
 	public function test_blog_assignment_is_network_global() {
 		$mtmt    = $this->make_term( 'Blog Term' );
 		$blog_id = 4242; // arbitrary blog id; the relationship layer does not require it to exist.
@@ -85,6 +105,9 @@ class Test_Object_Terms extends WP_UnitTestCase {
 		$this->assertSame( 'blog', $row->object_type );
 	}
 
+	/**
+	 * Post assignments keep an explicit blog_id and an empty object_type.
+	 */
 	public function test_post_assignment_keeps_blog_and_empty_type() {
 		$mtmt    = $this->make_term( 'Post Term' );
 		$post_id = 555;
@@ -120,7 +143,7 @@ class Test_Object_Terms extends WP_UnitTestCase {
 	}
 
 	/**
-	 * add/remove operate within the named namespace.
+	 * Add/remove operate within the named namespace.
 	 */
 	public function test_add_and_remove_within_namespace() {
 		$term_a  = $this->make_term( 'Add A' );

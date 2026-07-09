@@ -640,8 +640,8 @@ class Multisite_Taxonomy_Query {
 					FROM $wpdb->multisite_term_multisite_taxonomy
 					INNER JOIN $wpdb->multisite_terms USING (multisite_term_id)
 					WHERE multisite_taxonomy = %s
-					AND $wpdb->multisite_terms.$field IN ( " . implode( ', ', $query['multisite_terms'] ) . " )
-				",
+					AND $wpdb->multisite_terms.$field IN ( " . implode( ', ', $query['multisite_terms'] ) . ' )
+				',
 						$query['multisite_taxonomy']
 					)
 				);

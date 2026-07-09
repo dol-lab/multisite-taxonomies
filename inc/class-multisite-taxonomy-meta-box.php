@@ -196,7 +196,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @return void
 	 */
-	public function multisite_taxonomy_meta_box_callback( $obj, $metabox = '' ) {
+	public function multisite_taxonomy_meta_box_callback( $obj, $metabox = '' ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- Kept for the add_meta_box() callback signature.
 		// Resolve the object id and its ID namespace ('' = post, 'user', 'blog'). See plan.md.
 		if ( is_a( $obj, 'WP_User' ) ) {
 			$obj_id      = (int) $obj->ID;
@@ -285,7 +285,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @todo Create taxonomy-agnostic wrapper for this.
 	 *
-	 * @param int   $obj_id
+	 * @param int   $obj_id Object id whose terms are being edited.
 	 * @param array $args {
 	 *   Tags meta box arguments.
 	 *
@@ -298,7 +298,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 */
 	public function multisite_taxonomy_meta_box( int $obj_id, $args ) {
 		if ( ! isset( $args['taxonomy'] ) ) {
-			return false;
+			return;
 		}
 
 		$defaults              = array( 'object_type' => '' );
@@ -348,7 +348,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 *
 	 * @todo Create taxonomy-agnostic wrapper for this.
 	 *
-	 * @param int   $obj_id
+	 * @param int   $obj_id Object id whose terms are being edited.
 	 * @param array $args {
 	 *   hierarchical-term meta box arguments.
 	 *
@@ -659,7 +659,7 @@ class Multisite_Taxonomy_Meta_Box {
 		// @todo: maybe it's more elegant to wrap this function, add another parameter for object-type + add error-handling?!
 		$screen = get_current_screen();
 
-		// we are on a profile-page (network-wide or in a blog)
+		// We are on a profile-page (network-wide or in a blog).
 		if ( in_array( $screen->base, array( 'user-edit-network', 'profile-network', 'profile' ), true ) ) {
 			$object_type = 'user';
 		} else { // we are on a post-page.
@@ -667,9 +667,8 @@ class Multisite_Taxonomy_Meta_Box {
 			$object_type = $post->post_type;
 		}
 
-		// check if there is a taxonomy registered for this object-type.
+		// Check if there is a taxonomy registered for this object-type.
 		if ( count( (array) get_object_multisite_taxonomies( $object_type ) ) <= 0 ) {
-			error_log( 'No obj found for multisite taxonomy...' . __FILE__ . ' on line ' . __LINE__ );
 			return $obj_id;
 		}
 

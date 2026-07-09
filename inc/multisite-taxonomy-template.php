@@ -314,12 +314,12 @@ function dropdown_multisite_taxonomy( $args = '' ) {
  * post will be marked as checked.
  *
  * @param string $multisite_taxonomy Multisite taxonomy to retrieve multisite terms from.
- * @param int    $default Not used.
+ * @param int    $default_value Not used.
  * @param int    $number Number of multisite terms to retrieve. Defaults to 10.
- * @param bool   $echo Optionally output the list as well. Defaults to true.
+ * @param bool   $display Optionally output the list as well. Defaults to true.
  * @return array List of popular multisite term IDs.
  */
-function popular_multisite_terms_checklist( $multisite_taxonomy, $default = 0, $number = 10, $echo = true ) {
+function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value = 0, $number = 10, $display = true ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $default_value kept for signature parity with WordPress core wp_popular_terms_checklist().
 	$post = get_post();
 
 	$blog_id = get_current_blog_id();
@@ -346,7 +346,7 @@ function popular_multisite_terms_checklist( $multisite_taxonomy, $default = 0, $
 	$popular_ids = array();
 	foreach ( (array) $terms as $term ) {
 		$popular_ids[] = $term->multisite_term_id;
-		if ( ! $echo ) { // Hack for Ajax use.
+		if ( ! $display ) { // Hack for Ajax use.
 			continue;
 		}
 		$id      = "popular-$multisite_taxonomy-$term->id";
@@ -765,20 +765,18 @@ function generate_multisite_term_cloud( $multisite_terms, $args = '' ) {
 	if ( $multisite_terms_sorted !== $multisite_terms ) {
 		$multisite_terms = $multisite_terms_sorted;
 		unset( $multisite_terms_sorted );
-	} else {
-		if ( 'RAND' === $args['order'] ) {
+	} elseif ( 'RAND' === $args['order'] ) {
 			shuffle( $multisite_terms );
+	} else {
+		// SQL cannot save you; this is a second (potentially different) sort on a subset of data.
+		if ( 'name' === $args['orderby'] ) {
+			uasort( $multisite_terms, '_wp_object_name_sort_cb' );
 		} else {
-			// SQL cannot save you; this is a second (potentially different) sort on a subset of data.
-			if ( 'name' === $args['orderby'] ) {
-				uasort( $multisite_terms, '_wp_object_name_sort_cb' );
-			} else {
-				uasort( $multisite_terms, '_wp_object_count_sort_cb' );
-			}
+			uasort( $multisite_terms, '_wp_object_count_sort_cb' );
+		}
 
-			if ( 'DESC' === $args['order'] ) {
-				$multisite_terms = array_reverse( $multisite_terms, true );
-			}
+		if ( 'DESC' === $args['order'] ) {
+			$multisite_terms = array_reverse( $multisite_terms, true );
 		}
 	}
 
@@ -1185,7 +1183,7 @@ function has_multistite_term( $multisite_term = '', $multisite_taxonomy = '', $p
  * @param mixed $multisite_term     Optional. Multisite Term ID, name, slug or array of Multisite Term IDs, names, and slugs.
  * @return bool True for multisite taxonomy archive pages.
  */
-function is_multitaxo_plugin( $multisite_taxonomy = '', $multisite_term = '' ) {
+function is_multitaxo_plugin( $multisite_taxonomy = '', $multisite_term = '' ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter -- Stub matching WordPress core is_tax(); params reserved for the not-yet-implemented check.
 	global $wp_query;
 	if ( ! isset( $wp_query ) ) {
 		_doing_it_wrong( __FUNCTION__, esc_attr__( 'Conditional query tags do not work before the query is run. Before then, they always return false.', 'multitaxo' ), '3.1.0' );
@@ -1318,4 +1316,58 @@ function multitaxo_the_post_thumbnail( $post ) {
 		<img src="<?php echo esc_url( $post->post_thumbnail['url'] ); ?>" width="<?php echo esc_attr( $post->post_thumbnail['width'] ); ?>" height="<?php echo esc_attr( $post->post_thumbnail['height'] ); ?>" style="width: <?php echo esc_attr( $post->post_thumbnail['width'] ); ?>px; height: <?php echo esc_attr( $post->post_thumbnail['height'] ); ?>px" class="attachment-post-thumbnail wp-post-image" scale="0">
 	</div><!-- .page-image-thumbnail -->
 	<?php
+}
+
+/**
+ * Whether the current request is a multisite taxonomy term archive.
+ *
+ * @return bool
+ */
+function is_multisite_taxonomy_archive() {
+	$controller = Multitaxo_Plugin::get_archive_controller();
+	return $controller ? $controller->is_archive() : false;
+}
+
+/**
+ * The multisite term whose archive is currently being rendered, or null.
+ *
+ * @return Multisite_Term|null
+ */
+function get_queried_multisite_term() {
+	$controller = Multitaxo_Plugin::get_archive_controller();
+	return $controller ? $controller->get_queried_term() : null;
+}
+
+/**
+ * ID namespace of the current multisite taxonomy archive: '' (posts), 'user', or 'blog'.
+ *
+ * @return string
+ */
+function get_queried_multisite_object_type() {
+	$controller = Multitaxo_Plugin::get_archive_controller();
+	return $controller ? $controller->get_object_type() : '';
+}
+
+/**
+ * Whether the current request is a multisite taxonomy archive of users or sites (not posts).
+ *
+ * @return bool
+ */
+function is_multisite_taxonomy_object_archive() {
+	$controller = Multitaxo_Plugin::get_archive_controller();
+	return $controller && $controller->is_archive() && '' !== $controller->get_object_type();
+}
+
+/**
+ * The WP_User / WP_Site objects on the current page of a users/sites term archive.
+ *
+ * Returns an empty array on a posts archive or outside an archive, so a template can loop it
+ * unconditionally. Pagination state lives on the main $wp_query (see filter_the_posts()), so the
+ * usual the_posts_pagination() works.
+ *
+ * @return array WP_User[] or WP_Site[].
+ */
+function get_multisite_taxonomy_archive_objects() {
+	$controller = Multitaxo_Plugin::get_archive_controller();
+	return $controller ? $controller->get_objects() : array();
 }

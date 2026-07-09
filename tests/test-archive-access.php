@@ -8,6 +8,9 @@
  * @package multitaxo
  */
 
+/**
+ * Access control tests for the front-end archive controller.
+ */
 class Test_Archive_Access extends WP_UnitTestCase {
 
 	/**
@@ -52,6 +55,9 @@ class Test_Archive_Access extends WP_UnitTestCase {
 	 */
 	private $last_wp_die = null;
 
+	/**
+	 * Snapshot the query globals and register a fresh public archive taxonomy.
+	 */
 	public function set_up() {
 		parent::set_up();
 
@@ -63,14 +69,17 @@ class Test_Archive_Access extends WP_UnitTestCase {
 			$this->tax,
 			array( 'post', 'user', 'blog' ),
 			array(
-				'hierarchical'      => true,
-				'public'            => true,
-				'publicly_queryable'=> true,
-				'query_var'         => $this->tax,
+				'hierarchical'       => true,
+				'public'             => true,
+				'publicly_queryable' => true,
+				'query_var'          => $this->tax,
 			)
 		);
 	}
 
+	/**
+	 * Revoke any granted super admins and restore the query globals.
+	 */
 	public function tear_down() {
 		foreach ( $this->granted_super_admins as $user_id ) {
 			revoke_super_admin( $user_id );
@@ -86,6 +95,9 @@ class Test_Archive_Access extends WP_UnitTestCase {
 
 	/**
 	 * Create a term and return its slug.
+	 *
+	 * @param string $name Term name.
+	 * @return string The created term's slug.
 	 */
 	private function make_term_slug( $name ) {
 		$result = insert_multisite_term( $name, $this->tax, array(), false );
@@ -99,6 +111,11 @@ class Test_Archive_Access extends WP_UnitTestCase {
 
 	/**
 	 * Build a main query object that targets a multisite taxonomy archive.
+	 *
+	 * @param string      $slug        Term slug being requested.
+	 * @param string      $object_type Archive namespace ('user', 'blog' or '').
+	 * @param string|null $taxonomy    Taxonomy to query; defaults to the per-test taxonomy.
+	 * @return WP_Query The prepared main query, also installed in the query globals.
 	 */
 	private function make_archive_query( $slug, $object_type, $taxonomy = null ) {
 		if ( null === $taxonomy ) {
@@ -127,6 +144,11 @@ class Test_Archive_Access extends WP_UnitTestCase {
 
 	/**
 	 * Capture wp_die() calls during access-control tests.
+	 *
+	 * @param string|WP_Error $message wp_die() message.
+	 * @param string          $title   wp_die() title.
+	 * @param array           $args    wp_die() arguments (response code, etc.).
+	 * @throws RuntimeException Always, to unwind out of the controller like wp_die() would.
 	 */
 	public function handle_wp_die( $message, $title = '', $args = array() ) {
 		$this->last_wp_die = array(
@@ -140,6 +162,9 @@ class Test_Archive_Access extends WP_UnitTestCase {
 		throw new RuntimeException( 'wp_die called' );
 	}
 
+	/**
+	 * A non-super-admin is denied with a 403 on both the user and blog archives.
+	 */
 	public function test_non_super_admin_cannot_access_user_or_blog_archives() {
 		$slug = $this->make_term_slug( 'Restricted Archive' );
 
@@ -150,7 +175,7 @@ class Test_Archive_Access extends WP_UnitTestCase {
 		add_filter( 'wp_die_handler', array( $this, 'provide_wp_die_handler' ) );
 
 		foreach ( array( 'user', 'blog' ) as $object_type ) {
-			$query = $this->make_archive_query( $slug, $object_type );
+			$query             = $this->make_archive_query( $slug, $object_type );
 			$this->last_wp_die = null;
 
 			try {
@@ -170,6 +195,9 @@ class Test_Archive_Access extends WP_UnitTestCase {
 		remove_filter( 'wp_die_handler', array( $this, 'provide_wp_die_handler' ) );
 	}
 
+	/**
+	 * A super admin can load the user archive and the controller reports it active.
+	 */
 	public function test_super_admin_can_access_user_archive() {
 		$slug = $this->make_term_slug( 'Allowed Archive' );
 
@@ -188,6 +216,9 @@ class Test_Archive_Access extends WP_UnitTestCase {
 		$this->assertSame( 'user', $controller->get_object_type() );
 	}
 
+	/**
+	 * Requesting a blog archive on a taxonomy not registered for blogs gets a 404 with an explicit message.
+	 */
 	public function test_unsupported_blog_archive_gets_explicit_message() {
 		$taxonomy = 'archive_access_user_only_tax';
 
