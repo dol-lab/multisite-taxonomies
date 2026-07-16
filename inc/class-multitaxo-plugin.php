@@ -417,17 +417,11 @@ class Multitaxo_Plugin {
 	 * @return void
 	 */
 	public function admin_enqueue_styles_and_scripts() {
-		wp_register_script( 'admin-multisite-tags', MULTITAXO_PLUGIN_URL . '/assets/js/admin-multisite-tags.js', array( 'jquery', 'wp-ajax-response' ), MULTITAXO_VERSION, true );
-		wp_localize_script(
-			'admin-multisite-tags',
-			'tagsl10n',
-			array(
-				'noPerm' => esc_html__( 'Sorry, you are not allowed to do that.', 'multitaxo' ),
-				'broken' => esc_html__( 'An unidentified error has occurred.', 'multitaxo' ),
-			)
-		);
+		// Add and delete are ordinary server-handled requests (see load_multisite_taxonomy() and
+		// admin-multisite-tags.js), so this only needs `common` for validateForm()/showNotice().
+		wp_register_script( 'admin-multisite-tags', MULTITAXO_PLUGIN_URL . '/assets/js/admin-multisite-tags.js', array( 'jquery', 'common' ), self::asset_version( 'assets/js/admin-multisite-tags.js' ), true );
 
-		wp_register_script( 'inline-edit-multisite-tax', MULTITAXO_PLUGIN_URL . '/assets/js/inline-edit-multisite-tax.js', array( 'jquery', 'wp-a11y' ), MULTITAXO_VERSION, true );
+		wp_register_script( 'inline-edit-multisite-tax', MULTITAXO_PLUGIN_URL . '/assets/js/inline-edit-multisite-tax.js', array( 'jquery', 'wp-a11y' ), self::asset_version( 'assets/js/inline-edit-multisite-tax.js' ), true );
 		wp_localize_script(
 			'inline-edit-multisite-tax',
 			'inlineEditL10n',
@@ -436,6 +430,26 @@ class Multitaxo_Plugin {
 				'saved' => esc_html__( 'Changes saved.', 'multitaxo' ),
 			)
 		);
+	}
+
+	/**
+	 * Cache-busting version string for one of the plugin's own asset files.
+	 *
+	 * Returns the file's modification time so an edited script or style is re-fetched
+	 * immediately, instead of the browser serving a stale copy keyed to the static
+	 * plugin version. That staleness is the usual cause of "the ajax runs but the term
+	 * screen does not update after I changed the JS": the handler that runs is an older
+	 * cached build whose response wiring no longer matches the server. Falls back to
+	 * MULTITAXO_VERSION when the file is unreadable (e.g. a symlinked or minified build).
+	 *
+	 * @param string $relative_path Path relative to the plugin root, e.g. 'assets/js/admin-multisite-tags.js'.
+	 * @return string|int File modification time, or MULTITAXO_VERSION when it cannot be read.
+	 */
+	public static function asset_version( $relative_path ) {
+		$file  = MULTITAXO_PLUGIN_DIR . ltrim( $relative_path, '/' );
+		$mtime = is_readable( $file ) ? filemtime( $file ) : false;
+
+		return ( false !== $mtime ) ? $mtime : MULTITAXO_VERSION;
 	}
 
 	/**

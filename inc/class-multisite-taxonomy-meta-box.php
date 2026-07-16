@@ -58,7 +58,7 @@ class Multisite_Taxonomy_Meta_Box {
 
 		// The profile screens have no metabox toggle behaviour of their own, so wire up a
 		// self-contained one that also collapses the box by default.
-		wp_enqueue_script( 'multisite-taxonomy-profile-box', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-profile-box.js', array( 'jquery' ), MULTITAXO_VERSION, 1 );
+		wp_enqueue_script( 'multisite-taxonomy-profile-box', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-profile-box.js', array( 'jquery' ), Multitaxo_Plugin::asset_version( 'assets/js/multisite-taxonomy-profile-box.js' ), 1 );
 
 		add_meta_box(
 			'multsite_taxonomy_meta_box',
@@ -110,7 +110,7 @@ class Multisite_Taxonomy_Meta_Box {
 			'multisite-tags-site-info',
 			MULTITAXO_ASSETS_URL . '/js/multisite-tags-site-info.js',
 			array( 'jquery', 'multisite-taxonomy-box' ),
-			MULTITAXO_VERSION,
+			Multitaxo_Plugin::asset_version( 'assets/js/multisite-tags-site-info.js' ),
 			true
 		);
 
@@ -160,7 +160,7 @@ class Multisite_Taxonomy_Meta_Box {
 			return;
 		}
 
-		wp_enqueue_script( 'multisite-taxonomy-suggest', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-suggest.js', array( 'jquery', 'jquery-ui-core', 'jquery-ui-autocomplete', 'wp-a11y', 'tags-suggest' ), MULTITAXO_VERSION, 1 );
+		wp_enqueue_script( 'multisite-taxonomy-suggest', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-suggest.js', array( 'jquery', 'jquery-ui-core', 'jquery-ui-autocomplete', 'wp-a11y', 'tags-suggest' ), Multitaxo_Plugin::asset_version( 'assets/js/multisite-taxonomy-suggest.js' ), 1 );
 		wp_localize_script(
 			'multisite-taxonomy-suggest',
 			'multiTaxL10n',
@@ -173,7 +173,7 @@ class Multisite_Taxonomy_Meta_Box {
 			)
 		);
 
-		wp_enqueue_script( 'multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-box.js', array( 'multisite-taxonomy-suggest', 'jquery-ui-tabs' ), MULTITAXO_VERSION, 1 );
+		wp_enqueue_script( 'multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-taxonomy-box.js', array( 'multisite-taxonomy-suggest', 'jquery-ui-tabs' ), Multitaxo_Plugin::asset_version( 'assets/js/multisite-taxonomy-box.js' ), 1 );
 		wp_localize_script(
 			'multisite-taxonomy-box',
 			'mtaxsecurity',
@@ -183,9 +183,9 @@ class Multisite_Taxonomy_Meta_Box {
 			)
 		);
 
-		wp_enqueue_script( 'hierarchical-multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-hierarchical-term-box.js', array( 'jquery-ui-tabs', 'wp-lists' ), MULTITAXO_VERSION, 1 );
+		wp_enqueue_script( 'hierarchical-multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-hierarchical-term-box.js', array( 'jquery-ui-tabs', 'wp-lists' ), Multitaxo_Plugin::asset_version( 'assets/js/multisite-hierarchical-term-box.js' ), 1 );
 
-		wp_enqueue_style( 'multisite-taxonomy-meta-box', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), MULTITAXO_VERSION );
+		wp_enqueue_style( 'multisite-taxonomy-meta-box', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), Multitaxo_Plugin::asset_version( 'assets/css/admin.css' ) );
 	}
 
 	/**

@@ -1,83 +1,57 @@
-/* global ajaxurl, wpAjax, tagsl10n, showNotice, validateForm */
+/* global showNotice, validateForm */
+/**
+ * Term screen behaviour for the network multisite-taxonomy list tables.
+ *
+ * Adding and deleting terms deliberately run as ordinary requests rather than ajax.
+ * Multitaxo_Plugin::load_multisite_taxonomy() already handles `add-multisite-tag`, `delete` and
+ * `bulk-delete` server-side and redirects back to the list (POST/redirect/GET), so the table is
+ * always re-rendered from the database. That matters here because these lists are sorted,
+ * paginated and filtered: splicing a row in on the client dropped new terms at the top out of
+ * order, showed terms the current view filters out, and silently did nothing whenever the
+ * returned markup did not line up. Letting the server render is also the only thing that stays
+ * correct when terms are added or removed from another context, and it keeps working when the
+ * ajax layer (or JS entirely) fails.
+ *
+ * This file only layers the client-side niceties on top of that flow: validate before an add,
+ * confirm before a delete.
+ */
 
-jQuery(document).ready(function($) {
+jQuery( document ).ready( function( $ ) {
 
-	$( '#the-list' ).on( 'click', '.delete-tag', function() {
-		var t = $(this), tr = t.parents('tr'), r = true, data;
-		if ( 'undefined' != showNotice )
-			r = showNotice.warn();
-		if ( r ) {
-			data = t.attr('href').replace(/[^?]*\?/, '').replace(/action=delete/, 'action=delete-tag');
-			$.post(ajaxurl, data, function(r){
-				if ( '1' == r ) {
-					$('#ajax-response').empty();
-					tr.fadeOut('normal', function(){ tr.remove(); });
-					// Remove the multisite term from the parent box and tag cloud
-					$('select#parent option[value="' + data.match(/tag_ID=(\d+)/)[1] + '"]').remove();
-					$('a.tag-link-' + data.match(/tag_ID=(\d+)/)[1]).remove();
-				} else if ( '-1' == r ) {
-					$('#ajax-response').empty().append('<div class="error"><p>' + tagsl10n.noPerm + '</p></div>');
-					tr.children().css('backgroundColor', '');
-				} else {
-					$('#ajax-response').empty().append('<div class="error"><p>' + tagsl10n.broken + '</p></div>');
-					tr.children().css('backgroundColor', '');
-				}
-			});
-			tr.children().css('backgroundColor', '#f33');
+	/**
+	 * Confirm before following a row-action delete link.
+	 *
+	 * Returning false cancels the navigation; otherwise the link is followed normally and the
+	 * server deletes the term and redirects back to a freshly rendered list.
+	 */
+	$( '#the-list' ).on( 'click', '.delete-multisite-term', function() {
+		if ( 'undefined' === typeof showNotice ) {
+			return true;
 		}
-		return false;
-	});
 
+		return showNotice.warn();
+	} );
+
+	/**
+	 * The same confirmation for the delete link on the single term edit screen.
+	 */
 	$( '#edittag' ).on( 'click', '.delete', function( e ) {
 		if ( 'undefined' === typeof showNotice ) {
 			return true;
 		}
 
-		var response = showNotice.warn();
-		if ( ! response ) {
+		if ( ! showNotice.warn() ) {
 			e.preventDefault();
 		}
-	});
+	} );
 
-	$('#submit').click(function(){
-		var form = $(this).parents('form');
+	/**
+	 * Validate the add form before it submits natively. Returning false keeps the user on the
+	 * screen with the offending fields flagged; anything the client cannot catch is reported by
+	 * the server on the redirect.
+	 */
+	$( '#addtag' ).on( 'submit', function() {
+		return validateForm( $( this ) );
+	} );
 
-		if ( ! validateForm( form ) )
-			return false;
-
-		$.post(ajaxurl, $('#addtag').serialize(), function(r){
-			var res, parent, multisite_term, indent, i;
-
-			$('#ajax-response').empty();
-			res = wpAjax.parseAjaxResponse( r, 'ajax-response' );
-			if ( ! res || res.errors )
-				return;
-
-			parent = form.find( 'select#parent' ).val();
-
-			if ( parent > 0 && $('#tag-' + parent ).length > 0 ) // If the parent exists on this page, insert it below. Else insert it at the top of the list.
-				$( '#the-list #tag-' + parent ).after( res.responses[0].supplemental.noparents ); // As the parent exists, Insert the version with - - - prefixed
-			else
-				$( '#the-list' ).prepend( res.responses[0].supplemental.parents ); // As the parent is not visible, Insert the version with Parent - Child - This Multisite multisite_term
-
-			$('#the-list .no-items').remove();
-
-			if ( form.find('select#parent').length ) {
-				// Parents field exists, Add new multisite_term to the list.
-				multisite_term = res.responses[1].supplemental;
-
-				// Create an indent for the Parent field
-				indent = '';
-				for ( i = 0; i < res.responses[1].position; i++ )
-					indent += '&nbsp;&nbsp;&nbsp;';
-
-				form.find( 'select#parent option:selected' ).after( '<option value="' + multisite_term.multisite_term_id + '">' + indent + multisite_term.name + '</option>' );
-			}
-
-			$('input[type="text"]:visible, textarea:visible', form).val('');
-		});
-
-		return false;
-	});
-
-});
+} );
