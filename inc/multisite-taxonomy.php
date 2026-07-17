@@ -94,6 +94,52 @@ function get_multisite_taxonomy( $multisite_taxonomy ) {
 }
 
 /**
+ * Resolve the capability required to assign a taxonomy's terms, per object namespace.
+ *
+ * A single multisite taxonomy can span several object types (e.g. one taxonomy applied to both
+ * users and posts). The registered `assign_multisite_terms` capability is taxonomy-wide, but the
+ * right gate can legitimately differ per namespace: assigning a term to a user record may be a
+ * super-admin task while assigning the same taxonomy to a post is a normal author task. This
+ * filterable resolver lets a taxonomy vary its assign capability by object type without forking
+ * the taxonomy in two.
+ *
+ * @param string|Multisite_Taxonomy $taxonomy    Taxonomy name or object.
+ * @param string                    $object_type Object namespace ('' = post, 'user', 'blog').
+ * @return string The capability required to assign this taxonomy's terms for that object type.
+ */
+function get_multisite_taxonomy_assign_cap( $taxonomy, $object_type = '' ) {
+	if ( ! is_object( $taxonomy ) ) {
+		$taxonomy = get_multisite_taxonomy( $taxonomy );
+	}
+
+	$cap = ( $taxonomy && isset( $taxonomy->cap->assign_multisite_terms ) )
+		? $taxonomy->cap->assign_multisite_terms
+		: 'assign_multisite_terms';
+
+	/**
+	 * Filters the capability required to assign a taxonomy's terms, per object namespace.
+	 *
+	 * @param string                    $cap         The assign capability (taxonomy default).
+	 * @param Multisite_Taxonomy|false  $taxonomy    The taxonomy object (false if unknown).
+	 * @param string                    $object_type Object namespace ('' = post, 'user', 'blog').
+	 */
+	return apply_filters( 'multisite_taxonomy_assign_cap', $cap, $taxonomy, $object_type );
+}
+
+/**
+ * Whether the current user may assign a taxonomy's terms for a given object namespace.
+ *
+ * Thin wrapper over {@see get_multisite_taxonomy_assign_cap()} so callers read declaratively.
+ *
+ * @param string|Multisite_Taxonomy $taxonomy    Taxonomy name or object.
+ * @param string                    $object_type Object namespace ('' = post, 'user', 'blog').
+ * @return bool Whether the current user may assign the taxonomy's terms for that object type.
+ */
+function current_user_can_assign_multisite_terms( $taxonomy, $object_type = '' ) {
+	return current_user_can( get_multisite_taxonomy_assign_cap( $taxonomy, $object_type ) );
+}
+
+/**
  * Checks that the multisite taxonomy name exists.
  *
  * @global array $multisite_taxonomies The registered multisite taxonomies.

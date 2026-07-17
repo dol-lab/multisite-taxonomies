@@ -139,7 +139,20 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function add_multisite_taxonomy_meta_box_post( $post_type, $post ) {
-		if ( count( (array) get_object_multisite_taxonomies( $post_type ) ) > 0 && ( current_user_can( 'assign_multisite_terms' ) ) ) {
+		$taxonomies = get_object_multisite_taxonomies( $post_type, 'objects' );
+
+		// Show the box if the user can assign at least one of this post type's taxonomies. Each
+		// taxonomy still renders editable or read-only individually (see the meta box callback), so
+		// a taxonomy the user cannot assign appears read-only rather than being hidden outright.
+		$can_assign_any = false;
+		foreach ( $taxonomies as $taxonomy ) {
+			if ( current_user_can_assign_multisite_terms( $taxonomy, 'post' ) ) {
+				$can_assign_any = true;
+				break;
+			}
+		}
+
+		if ( $can_assign_any ) {
 			add_meta_box( 'multsite_taxonomy_meta_box', esc_html__( 'Multisite Tags', 'multitaxo' ), array( $this, 'multisite_taxonomy_meta_box_callback' ), null, 'advanced', 'default', array( $post, $post_type ) );
 		}
 	}
@@ -305,9 +318,17 @@ class Multisite_Taxonomy_Meta_Box {
 		$r                     = wp_parse_args( $args, $defaults );
 		$tax_name              = esc_attr( $r['taxonomy'] );
 		$taxonomy              = get_multisite_taxonomy( $r['taxonomy'] );
-		$user_can_assign_terms = current_user_can( $taxonomy->cap->assign_multisite_terms );
-		$comma                 = _x( ',', 'tag delimiter', 'multitaxo' );
-		$terms_to_edit         = get_multisite_terms_to_edit( $obj_id, $tax_name, 0, $r['object_type'] );
+		$user_can_assign_terms = current_user_can_assign_multisite_terms( $taxonomy, $r['object_type'] );
+
+		// Without the assign capability, show the terms read-only rather than a disabled-looking
+		// picker whose edits would be silently dropped on save.
+		if ( ! $user_can_assign_terms ) {
+			$this->read_only_terms_box( $obj_id, $r['object_type'], $taxonomy );
+			return;
+		}
+
+		$comma         = _x( ',', 'tag delimiter', 'multitaxo' );
+		$terms_to_edit = get_multisite_terms_to_edit( $obj_id, $tax_name, 0, $r['object_type'] );
 
 		if ( ! is_string( $terms_to_edit ) ) {
 			$terms_to_edit = '';
@@ -372,6 +393,13 @@ class Multisite_Taxonomy_Meta_Box {
 		$tax_name = esc_attr( $r['taxonomy'] );
 		$taxonomy = get_multisite_taxonomy( $r['taxonomy'] );
 
+		// Without the assign capability, show the terms read-only rather than editable checkboxes
+		// whose changes would be silently dropped on save.
+		if ( ! current_user_can_assign_multisite_terms( $taxonomy, $r['object_type'] ) ) {
+			$this->read_only_terms_box( $obj_id, $r['object_type'], $taxonomy );
+			return;
+		}
+
 		wp_nonce_field( 'multisite_taxonomy_meta_box', 'multisite_taxonomy_meta_box_nonce' );
 		?>
 		<div id="taxonomy-<?php echo esc_attr( $tax_name ); ?>" class="multisite-hierarchical-taxonomy-div">
@@ -382,7 +410,7 @@ class Multisite_Taxonomy_Meta_Box {
 
 			<div id="<?php echo esc_attr( $tax_name ); ?>-pop" class="tabs-panel" style="display: none;">
 				<ul id="<?php echo esc_attr( $tax_name ); ?>checklist-pop" class="hierarchical-term-checklist form-no-clear" >
-					<?php $popular_ids = popular_multisite_terms_checklist( $tax_name ); ?>
+					<?php $popular_ids = popular_multisite_terms_checklist( $tax_name, 0, 10, true, $r['object_type'] ); ?>
 				</ul>
 			</div>
 
@@ -461,6 +489,56 @@ class Multisite_Taxonomy_Meta_Box {
 					</p>
 				</div>
 			<?php endif; ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render an object's assigned terms as a read-only list.
+	 *
+	 * Used on the edit screens when the current user lacks the taxonomy's assign capability: the
+	 * terms are shown as plain text with an explanatory note, so the picker never looks editable
+	 * (and never silently discards changes on save).
+	 *
+	 * @param int                $obj_id      Object id whose terms to list.
+	 * @param string             $object_type Object namespace ('' = post, 'user', 'blog').
+	 * @param Multisite_Taxonomy $taxonomy    The taxonomy object.
+	 * @return void
+	 */
+	private function read_only_terms_box( int $obj_id, string $object_type, $taxonomy ) {
+		$terms = get_object_multisite_terms( $obj_id, $taxonomy->name, 0, array( 'fields' => 'names' ), $object_type );
+
+		if ( is_wp_error( $terms ) || ! is_array( $terms ) ) {
+			$terms = array();
+		}
+
+		/**
+		 * Filters the note shown when the current user cannot edit a taxonomy's terms.
+		 *
+		 * @param string             $note     The explanatory note.
+		 * @param Multisite_Taxonomy $taxonomy The taxonomy object.
+		 */
+		$note = apply_filters(
+			'multisite_taxonomy_read_only_note',
+			sprintf(
+				/* translators: %s: taxonomy name, e.g. "Affiliations". */
+				__( 'You cannot change these %s. Only an administrator can.', 'multitaxo' ),
+				$taxonomy->labels->name
+			),
+			$taxonomy
+		);
+		?>
+		<div class="multitaxonomy-readonly" id="multi-taxonomy-readonly-<?php echo esc_attr( $taxonomy->name ); ?>">
+			<?php if ( empty( $terms ) ) : ?>
+				<p><?php echo esc_html( $taxonomy->labels->no_terms ); ?></p>
+			<?php else : ?>
+				<ul class="multitaxonomy-readonly-list">
+					<?php foreach ( $terms as $term_name ) : ?>
+						<li><?php echo esc_html( $term_name ); ?></li>
+					<?php endforeach; ?>
+				</ul>
+			<?php endif; ?>
+			<p class="description"><?php echo esc_html( $note ); ?></p>
 		</div>
 		<?php
 	}
@@ -652,11 +730,6 @@ class Multisite_Taxonomy_Meta_Box {
 			return $obj_id;
 		}
 
-		if ( ! current_user_can( 'assign_multisite_terms', $obj_id ) ) {
-			return $obj_id;
-		}
-
-		// @todo: maybe it's more elegant to wrap this function, add another parameter for object-type + add error-handling?!
 		$screen = get_current_screen();
 
 		// We are on a profile-page (network-wide or in a blog).
@@ -666,6 +739,11 @@ class Multisite_Taxonomy_Meta_Box {
 			$post        = get_post( $obj_id );
 			$object_type = $post->post_type;
 		}
+
+		// Authorization is enforced per taxonomy below, object-type-aware, so the same taxonomy can
+		// e.g. be assignable to a post by an author but only to a user by a super-admin. There is no
+		// coarse gate here: a submission the user is not allowed to make is simply not written (and
+		// the picker never renders as editable for them in the first place — nothing is dropped).
 
 		// Check if there is a taxonomy registered for this object-type.
 		if ( count( (array) get_object_multisite_taxonomies( $object_type ) ) <= 0 ) {
@@ -698,7 +776,7 @@ class Multisite_Taxonomy_Meta_Box {
 				$terms = array_filter( $terms );
 			}
 
-			if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
+			if ( current_user_can_assign_multisite_terms( $taxonomy_obj, $object_type ) ) {
 				if ( 'user' === $object_type ) {
 					// User relationships live in the 'user' namespace at blog_id = 0 (forced by set_object_multisite_terms).
 					set_object_multisite_terms( $obj_id, $this->prepare_terms_for_save( $terms, $taxonomy ), $taxonomy, 0, false, 'user' );
@@ -787,7 +865,7 @@ class Multisite_Taxonomy_Meta_Box {
 				continue;
 			}
 
-			if ( current_user_can( $taxonomy_obj->cap->assign_multisite_terms ) ) {
+			if ( current_user_can_assign_multisite_terms( $taxonomy_obj, 'blog' ) ) {
 				// Blog relationships live in the 'blog' namespace at blog_id = 0 (forced by set_object_multisite_terms).
 				set_object_multisite_terms( $blog_id, $this->prepare_terms_for_save( $terms, $taxonomy ), $taxonomy, 0, false, 'blog' );
 			}

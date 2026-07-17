@@ -224,3 +224,13 @@ ul.hierarchical-term-checklist ul.children.mtax-collapsed {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
+/* Read-only term list shown when the current user cannot assign a taxonomy's terms. */
+.multitaxonomy-readonly-list {
+    margin: 0 0 8px;
+    list-style: disc;
+    padding-left: 20px;
+}
+
+.multitaxonomy-readonly-list li {
+    margin: 0 0 2px;
+}

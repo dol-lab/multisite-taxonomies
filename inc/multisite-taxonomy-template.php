@@ -62,7 +62,7 @@ function multisite_terms_checklist( $post_id = 0, $args = array() ) {
 	$args = array( 'taxonomy' => $multisite_taxonomy );
 
 	$multi_tax        = get_multisite_taxonomy( $multisite_taxonomy );
-	$args['disabled'] = ! current_user_can( $multi_tax->cap->assign_multisite_terms );
+	$args['disabled'] = ! current_user_can_assign_multisite_terms( $multi_tax, $r['object_type'] );
 
 	$args['list_only'] = ! empty( $r['list_only'] );
 
@@ -317,9 +317,10 @@ function dropdown_multisite_taxonomy( $args = '' ) {
  * @param int    $default_value Not used.
  * @param int    $number Number of multisite terms to retrieve. Defaults to 10.
  * @param bool   $display Optionally output the list as well. Defaults to true.
+ * @param string $object_type Object namespace ('' = post, 'user', 'blog') the checklist assigns to.
  * @return array List of popular multisite term IDs.
  */
-function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value = 0, $number = 10, $display = true ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $default_value kept for signature parity with WordPress core wp_popular_terms_checklist().
+function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value = 0, $number = 10, $display = true, $object_type = '' ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $default_value kept for signature parity with WordPress core wp_popular_terms_checklist().
 	$post = get_post();
 
 	$blog_id = get_current_blog_id();
@@ -355,7 +356,7 @@ function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value 
 
 		<li id="<?php echo esc_attr( $id ); ?>" class="popular-multisite-taxonomy">
 			<label class="selectit">
-				<input id="in-<?php echo esc_attr( $id ); ?>" type="checkbox" <?php echo $checked; // phpcs:ignore WordPress.Security.EscapeOutput ?> value="<?php echo (int) $term->id; ?>" <?php disabled( ! current_user_can( $tax->cap->assign_multisite_terms ) ); ?> />
+				<input id="in-<?php echo esc_attr( $id ); ?>" type="checkbox" <?php echo $checked; // phpcs:ignore WordPress.Security.EscapeOutput ?> value="<?php echo (int) $term->id; ?>" <?php disabled( ! current_user_can_assign_multisite_terms( $tax, $object_type ) ); ?> />
 				<?php
 				/** This filter is documented in wp-includes/category-template.php */
 				echo esc_html( apply_filters( 'the_multisite_taxonomy', $term->name ) );
