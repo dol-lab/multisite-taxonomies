@@ -396,9 +396,45 @@ class Multitaxo_Plugin {
 		$wpdb->multisite_term_relationships      = $wpdb->base_prefix . 'multisite_term_relationships';
 		$wpdb->multisite_term_multisite_taxonomy = $wpdb->base_prefix . 'multisite_term_multisite_taxonomy';
 
-		if ( false === get_site_option( 'multitaxo_tables_created' ) ) {
+		// The option alone is not proof: a DB imported without the multisite tables (or one
+		// where they were dropped) keeps the sitemeta row and would never self-heal, leaving
+		// every consumer to hit "table doesn't exist". Verify once per request, then trust it.
+		static $verified = false;
+		if ( $verified ) {
+			return;
+		}
+		$verified = true;
+
+		if ( false === get_site_option( 'multitaxo_tables_created' ) || ! self::tables_exist() ) {
 			self::create_database_tables();
 		}
+	}
+
+	/**
+	 * Whether all four multisite taxonomy tables are present in the database.
+	 *
+	 * @global wpdb $wpdb The WordPress database abstraction object.
+	 *
+	 * @access private
+	 * @return bool
+	 */
+	private static function tables_exist() {
+		global $wpdb;
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- schema check; no caching layer is meaningful for it.
+		$found = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM information_schema.tables
+				WHERE table_schema = DATABASE() AND table_name IN ( %s, %s, %s, %s )',
+				$wpdb->multisite_termmeta,
+				$wpdb->multisite_terms,
+				$wpdb->multisite_term_relationships,
+				$wpdb->multisite_term_multisite_taxonomy
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return 4 === $found;
 	}
 
 	/**
@@ -560,7 +596,11 @@ class Multitaxo_Plugin {
 		update_site_option( 'multitaxo_tables_created', 1 );
 
 		// Fresh installs already have the latest schema, so record the current DB version.
-		update_site_option( 'multitaxo_db_version', self::DB_VERSION );
+		// Never overwrite an existing (older) version though: the self-heal path can land
+		// here with surviving old-schema tables whose pending migrations must still run.
+		if ( false === get_site_option( 'multitaxo_db_version' ) ) {
+			update_site_option( 'multitaxo_db_version', self::DB_VERSION );
+		}
 	}
 
 	/**

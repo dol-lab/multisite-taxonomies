@@ -53,3 +53,18 @@ tests_add_filter( 'muplugins_loaded', '_manually_load_plugin' );
 
 // Start up the WP testing environment.
 require_once "{$_tests_dir}/includes/bootstrap.php";
+
+/*
+ * Purge stale rows from previous runs (mirrors the spaces-core bootstrap). The multisite_*
+ * tables are not part of the core schema the test installer resets, and a mid-test implicit
+ * commit (e.g. a factory-created site's CREATE TABLE statements) makes that test's rows
+ * permanent — they then leak into later runs and skew raw row-count assertions. The fresh
+ * install needs no preexisting rows, so an empty baseline is always correct.
+ */
+( function () {
+	global $wpdb;
+	$tables = array( 'multisite_termmeta', 'multisite_terms', 'multisite_term_relationships', 'multisite_term_multisite_taxonomy' );
+	foreach ( $tables as $table ) {
+		$wpdb->query( 'TRUNCATE TABLE `' . $wpdb->base_prefix . $table . '`' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- test bootstrap housekeeping on fixed table names.
+	}
+} )();
