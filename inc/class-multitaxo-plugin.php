@@ -421,20 +421,30 @@ class Multitaxo_Plugin {
 	private static function tables_exist() {
 		global $wpdb;
 
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- schema check; no caching layer is meaningful for it.
-		$found = (int) $wpdb->get_var(
-			$wpdb->prepare(
-				'SELECT COUNT(*) FROM information_schema.tables
-				WHERE table_schema = DATABASE() AND table_name IN ( %s, %s, %s, %s )',
-				$wpdb->multisite_termmeta,
-				$wpdb->multisite_terms,
-				$wpdb->multisite_term_relationships,
-				$wpdb->multisite_term_multisite_taxonomy
-			)
+		// Probe each table directly instead of querying information_schema or SHOW TABLES:
+		// on a large multisite the schema holds tens of thousands of per-site tables and any
+		// catalog walk costs ~50ms (MariaDB), while opening four named tables is ~0.25ms.
+		// A missing table surfaces as a query error, which suppress_errors() keeps quiet.
+		$tables = array(
+			$wpdb->multisite_termmeta,
+			$wpdb->multisite_terms,
+			$wpdb->multisite_term_relationships,
+			$wpdb->multisite_term_multisite_taxonomy,
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-		return 4 === $found;
+		$suppress = $wpdb->suppress_errors();
+		$exist    = true;
+		foreach ( $tables as $table ) {
+			$wpdb->get_var( 'SELECT 1 FROM `' . $table . '` LIMIT 1' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- fixed table names; schema check, nothing to cache.
+			if ( '' !== $wpdb->last_error ) {
+				$exist = false;
+				break;
+			}
+		}
+		$wpdb->suppress_errors( $suppress );
+		$wpdb->last_error = '';
+
+		return $exist;
 	}
 
 	/**
