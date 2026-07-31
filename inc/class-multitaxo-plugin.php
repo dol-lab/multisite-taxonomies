@@ -66,6 +66,9 @@ class Multitaxo_Plugin {
 		add_action( 'init', array( __CLASS__, 'register_database_tables' ), 1 );
 		add_action( 'switch_blog', array( __CLASS__, 'register_database_tables' ) );
 
+		// Install/repair the schema — maintenance requests only, see maybe_install_database().
+		add_action( 'init', array( __CLASS__, 'maybe_install_database' ), 1 );
+
 		// Run schema migrations for installs predating the current DB version.
 		add_action( 'init', array( __CLASS__, 'maybe_upgrade_database' ), 2 );
 
@@ -383,6 +386,10 @@ class Multitaxo_Plugin {
 	/**
 	 * Register the Multisite Taxonomies database tables for use with $wpdb.
 	 *
+	 * Pure property assignment, no database access: this also runs on every `switch_blog`,
+	 * and a loop over a few hundred Spaces must not pay for a schema check each time.
+	 * Installing/repairing the schema is maybe_install_database()'s job.
+	 *
 	 * @global wpdb $wpdb The WordPress database abstraction object.
 	 *
 	 * @access public
@@ -395,19 +402,44 @@ class Multitaxo_Plugin {
 		$wpdb->multisite_terms                   = $wpdb->base_prefix . 'multisite_terms';
 		$wpdb->multisite_term_relationships      = $wpdb->base_prefix . 'multisite_term_relationships';
 		$wpdb->multisite_term_multisite_taxonomy = $wpdb->base_prefix . 'multisite_term_multisite_taxonomy';
+	}
 
-		// The option alone is not proof: a DB imported without the multisite tables (or one
-		// where they were dropped) keeps the sitemeta row and would never self-heal, leaving
-		// every consumer to hit "table doesn't exist". Verify once per request, then trust it.
-		static $verified = false;
-		if ( $verified ) {
+	/**
+	 * Create the tables when they are missing — on maintenance requests, at most once a day.
+	 *
+	 * The `multitaxo_tables_created` option alone is not proof: a DB imported without the
+	 * multisite tables (or one where they were dropped) keeps the sitemeta row and would never
+	 * self-heal, leaving every consumer to hit "table doesn't exist". So the option check is
+	 * backed by probing the tables — but that is five queries, and a front-end request must not
+	 * pay them on the off chance that someone dropped a table. Two gates keep it off the hot path:
+	 *
+	 * - only admin, cron and WP-CLI requests check at all (activation creates the tables anyway,
+	 *   and cron runs often enough that an imported DB heals within minutes, unattended);
+	 * - a network transient records the verdict, so even those requests probe once per day.
+	 *
+	 * @access public
+	 * @return void
+	 */
+	public static function maybe_install_database() {
+		if ( ! is_admin() && ! wp_doing_cron() && ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
 			return;
 		}
-		$verified = true;
+
+		if ( false !== get_site_transient( 'multitaxo_tables_verified' ) ) {
+			return;
+		}
 
 		if ( false === get_site_option( 'multitaxo_tables_created' ) || ! self::tables_exist() ) {
 			self::create_database_tables();
 		}
+
+		// Installs predating DB versioning have the tables but no version option, which
+		// maybe_upgrade_database() reads as "not installed". Record 0 so its migrations run.
+		if ( false === get_site_option( 'multitaxo_db_version' ) ) {
+			update_site_option( 'multitaxo_db_version', 0 );
+		}
+
+		set_site_transient( 'multitaxo_tables_verified', 1, DAY_IN_SECONDS );
 	}
 
 	/**
@@ -506,6 +538,7 @@ class Multitaxo_Plugin {
 	 */
 	public function activation_hook() {
 		self::register_database_tables();
+		self::create_database_tables();
 	}
 
 	/**
@@ -627,12 +660,12 @@ class Multitaxo_Plugin {
 	public static function maybe_upgrade_database() {
 		global $wpdb;
 
-		// Tables not created yet: register_database_tables() handles fresh installs.
-		if ( false === get_site_option( 'multitaxo_tables_created' ) ) {
-			return;
-		}
-
-		if ( (int) get_site_option( 'multitaxo_db_version', 0 ) >= self::DB_VERSION ) {
+		// One option read is all this costs on a normal request, so it stays on `init` for every
+		// request: a pending migration must land on the first hit after a deploy, not whenever an
+		// admin next logs in. `false` means the schema is not installed (or predates versioning) —
+		// maybe_install_database() settles that case and seeds a version to migrate from.
+		$installed = get_site_option( 'multitaxo_db_version' );
+		if ( false === $installed || (int) $installed >= self::DB_VERSION ) {
 			return;
 		}
 

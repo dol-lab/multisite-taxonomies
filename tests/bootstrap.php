@@ -5,8 +5,9 @@
  * Mirrors the spaces-core setup. Always runs as multisite: the plugin keys its tables off
  * $wpdb->base_prefix and stores user/blog relationships network-globally (blog_id 0), so a
  * single-site bootstrap would not represent the real environment. The relationship tables are
- * created lazily on `init` by Multitaxo_Plugin::register_database_tables(), which the WP test
- * bootstrap fires after the plugin is loaded — so no explicit schema install is needed here.
+ * not part of the core schema the test installer creates, so this bootstrap installs them
+ * itself: in production that job belongs to activation and to Multitaxo_Plugin's
+ * maybe_install_database(), neither of which fires under PHPUnit.
  *
  * @package multitaxo
  */
@@ -53,6 +54,10 @@ tests_add_filter( 'muplugins_loaded', '_manually_load_plugin' );
 
 // Start up the WP testing environment.
 require_once "{$_tests_dir}/includes/bootstrap.php";
+
+// Install the plugin's own tables (CREATE TABLE IF NOT EXISTS, so re-runs are free).
+Multitaxo_Plugin::register_database_tables();
+Multitaxo_Plugin::create_database_tables();
 
 /*
  * Purge stale rows from previous runs (mirrors the spaces-core bootstrap). The multisite_*
