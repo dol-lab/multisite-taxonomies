@@ -239,14 +239,32 @@ var multiTagBox, array_multi_unique_noempty;
 				}
 			}).each( function( i, element ) {
 				$( element ).multiTagsSuggest();
+			})
+			/*
+			 * Picking a suggestion commits the term right away, so the user does not have to
+			 * press "Add" as well (forgetting it silently dropped the selection on save).
+			 * jQuery UI fires this event before the widget's own `select` option writes the
+			 * picked term into the field, so flush on the next tick.
+			 */
+			.on( 'autocompleteselect', function() {
+				var input = this;
+
+				window.setTimeout( function() {
+					multiTagBox.userAction = 'add';
+					multiTagBox.flushTags( $( input ).closest( '.multitaxonomydiv' ) );
+				}, 0 );
 			});
 
-			// save tags on post save/publish
-			$('#post').submit(function(){
-				$('div.multitaxonomydiv').each( function() {
-					multiTagBox.flushTags(this, false, 1);
-                });
-            });
+			/*
+			 * Commit a term still sitting in the input when the surrounding form is submitted.
+			 * The picker is used outside the post editor as well (user profile, network
+			 * site-info), so bind to whichever form contains it rather than to `#post`.
+			 */
+			$( 'div.multitaxonomydiv' ).closest( 'form' ).on( 'submit', function() {
+				$( this ).find( 'div.multitaxonomydiv' ).each( function() {
+					multiTagBox.flushTags( this, false, 1 );
+				});
+			});
 
 			// Fetch and toggle the Tag cloud.
 			$('.multitaxonomycloud-link').click(function(){

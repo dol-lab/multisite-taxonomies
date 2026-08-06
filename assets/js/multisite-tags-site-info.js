@@ -42,8 +42,10 @@
 		const isDirty = () => ! submitting && serialize() !== initial;
 
 		// The picker updates its own state inside its click/keyup/change handlers, so re-check
-		// on the next tick to read the value after those handlers have run.
-		picker.on( 'click keyup change', () => {
+		// on the next tick to read the value after those handlers have run. Listening on the
+		// document rather than the picker also catches the autocomplete menu, which jQuery UI
+		// appends to the body: picking a suggestion there assigns a term too.
+		$( document ).on( 'click keyup change autocompleteselect', () => {
 			window.setTimeout( () => notice.toggle( isDirty() ), 0 );
 		} );
 
