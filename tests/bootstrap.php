@@ -2,8 +2,8 @@
 /**
  * PHPUnit bootstrap for the Multisite Taxonomies fork.
  *
- * Mirrors the spaces-core setup. Always runs as multisite: the plugin keys its tables off
- * $wpdb->base_prefix and stores user/blog relationships network-globally (blog_id 0), so a
+ * Always runs as multisite: the plugin keys its tables off $wpdb->base_prefix and stores
+ * user/blog relationships network-globally (blog_id 0), so a
  * single-site bootstrap would not represent the real environment. The relationship tables are
  * not part of the core schema the test installer creates, so this bootstrap installs them
  * itself: in production that job belongs to activation and to Multitaxo_Plugin's
@@ -60,7 +60,7 @@ Multitaxo_Plugin::register_database_tables();
 Multitaxo_Plugin::create_database_tables();
 
 /*
- * Purge stale rows from previous runs (mirrors the spaces-core bootstrap). The multisite_*
+ * Purge stale rows from previous runs. The multisite_*
  * tables are not part of the core schema the test installer resets, and a mid-test implicit
  * commit (e.g. a factory-created site's CREATE TABLE statements) makes that test's rows
  * permanent — they then leak into later runs and skew raw row-count assertions. The fresh

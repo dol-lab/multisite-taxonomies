@@ -384,10 +384,37 @@ class Multitaxo_Plugin {
 	}
 
 	/**
+	 * Log a developer-facing message.
+	 *
+	 * Fires `multitaxo_log` so a host with its own logger can take the line; nothing
+	 * hooked means nothing would see it, so those lines go to error_log() instead. The
+	 * plugin knows no logger but PHP's own.
+	 *
+	 * @param string $level   PSR-3 level, e.g. 'warning' or 'error'.
+	 * @param string $message The message.
+	 * @param string $source  Caller id, e.g. __METHOD__.
+	 * @return void
+	 */
+	private static function log( $level, $message, $source ) {
+		if ( has_action( 'multitaxo_log' ) ) {
+			/**
+			 * Fires for every developer-facing log line of this plugin.
+			 *
+			 * @param string $level   PSR-3 level, e.g. 'warning' or 'error'.
+			 * @param string $message The message.
+			 * @param string $source  Caller id, e.g. __METHOD__.
+			 */
+			do_action( 'multitaxo_log', $level, $message, $source );
+			return;
+		}
+		error_log( 'multisite_taxonomies: ' . $source . ': ' . $message ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+	}
+
+	/**
 	 * Register the Multisite Taxonomies database tables for use with $wpdb.
 	 *
 	 * Pure property assignment, no database access: this also runs on every `switch_blog`,
-	 * and a loop over a few hundred Spaces must not pay for a schema check each time.
+	 * and a loop over many sites must not pay for a schema check each time.
 	 * Installing/repairing the schema is maybe_install_database()'s job.
 	 *
 	 * @global wpdb $wpdb The WordPress database abstraction object.
@@ -409,13 +436,19 @@ class Multitaxo_Plugin {
 	 *
 	 * The `multitaxo_tables_created` option alone is not proof: a DB imported without the
 	 * multisite tables (or one where they were dropped) keeps the sitemeta row and would never
-	 * self-heal, leaving every consumer to hit "table doesn't exist". So the option check is
+	 * recover, leaving every consumer to hit "table doesn't exist". So the option check is
 	 * backed by probing the tables — but that is five queries, and a front-end request must not
 	 * pay them on the off chance that someone dropped a table. Two gates keep it off the hot path:
 	 *
 	 * - only admin, cron and WP-CLI requests check at all (activation creates the tables anyway,
-	 *   and cron runs often enough that an imported DB heals within minutes, unattended);
+	 *   and cron runs often enough that an imported DB recovers within minutes, unattended);
 	 * - a network transient records the verdict, so even those requests probe once per day.
+	 *
+	 * Recreating tables that were once created is repairing damage, not installing: the data
+	 * that was in them is gone, and an empty schema makes that look like "no terms yet". So the
+	 * repair is logged at `warning`, never silent. A repair that does not work (the DB user
+	 * having no CREATE right is the usual cause) is logged at `error` and leaves the transient
+	 * unset, so the next maintenance request retries instead of muting the failure for a day.
 	 *
 	 * @access public
 	 * @return void
@@ -429,8 +462,17 @@ class Multitaxo_Plugin {
 			return;
 		}
 
-		if ( false === get_site_option( 'multitaxo_tables_created' ) || ! self::tables_exist() ) {
-			self::create_database_tables();
+		$installed = ( false !== get_site_option( 'multitaxo_tables_created' ) );
+
+		if ( ! $installed || ! self::tables_exist() ) {
+			if ( $installed ) {
+				self::log( 'warning', 'tables are missing and are being recreated empty: the terms and relationships they held are gone (dropped tables, or a database imported without them)', __METHOD__ );
+			}
+
+			if ( ! self::create_database_tables() ) {
+				self::log( 'error', 'could not create the multisite taxonomy tables; check that the database user may CREATE TABLE', __METHOD__ );
+				return;
+			}
 		}
 
 		// Installs predating DB versioning have the tables but no version option, which
@@ -538,7 +580,10 @@ class Multitaxo_Plugin {
 	 */
 	public function activation_hook() {
 		self::register_database_tables();
-		self::create_database_tables();
+
+		if ( ! self::create_database_tables() ) {
+			self::log( 'error', 'activation could not create the multisite taxonomy tables; the plugin is active but has no schema', __METHOD__ );
+		}
 	}
 
 	/**
@@ -557,10 +602,14 @@ class Multitaxo_Plugin {
 	 * @global wpdb $wpdb The WordPress database abstraction object.
 	 *
 	 * @access public
-	 * @return void
+	 * @return bool Whether every CREATE TABLE succeeded.
 	 */
 	public static function create_database_tables() {
 		global $wpdb;
+
+		// A CREATE that fails (no privilege, disk full) must not be recorded as an install:
+		// callers need to know the schema is not there, and the options stay untouched.
+		$created = true;
 		// Load the db delta scripts.
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
@@ -586,7 +635,7 @@ class Multitaxo_Plugin {
 			KEY meta_key (meta_key(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		$wpdb->query( $multisite_termmeta_sql );
+		$created = ( false !== $wpdb->query( $multisite_termmeta_sql ) ) && $created;
 
 		// Table structure for table `wp_multisite_terms`.
 		$multisite_terms_sql = 'CREATE TABLE IF NOT EXISTS `' . $wpdb->multisite_terms . '` (
@@ -599,7 +648,7 @@ class Multitaxo_Plugin {
 			KEY name (name(' . $max_index_length . '))
 		) ' . $charset_collate . ';';
 
-		$wpdb->query( $multisite_terms_sql );
+		$created = ( false !== $wpdb->query( $multisite_terms_sql ) ) && $created;
 
 		// Table structure for table `wp_multisite_term_relationships`.
 		//
@@ -608,7 +657,7 @@ class Multitaxo_Plugin {
 		// - 'user' => wp_users.
 		// - 'blog' => wp_blogs.
 		// Posts are always stored as '' (never the literal 'post'), so the three values
-		// stay distinct and a single taxonomy can safely span object types. See plan.md.
+		// stay distinct and a single taxonomy can safely span object types.
 		$multisite_term_relationships_sql = 'CREATE TABLE IF NOT EXISTS `' . $wpdb->multisite_term_relationships . '` (
 			blog_id bigint(20) unsigned NOT NULL default 0,
 			object_id bigint(20) unsigned NOT NULL default 0,
@@ -619,7 +668,7 @@ class Multitaxo_Plugin {
 			KEY multisite_term_multisite_taxonomy_id (multisite_term_multisite_taxonomy_id)
 		) ' . $charset_collate . ';';
 
-		$wpdb->query( $multisite_term_relationships_sql );
+		$created = ( false !== $wpdb->query( $multisite_term_relationships_sql ) ) && $created;
 
 		// Table structure for table `wp_multisite_term_multisite_taxonomy`.
 		$multisite_term_multisite_taxonomy_sql = 'CREATE TABLE IF NOT EXISTS `' . $wpdb->multisite_term_multisite_taxonomy . '` (
@@ -634,16 +683,22 @@ class Multitaxo_Plugin {
 			KEY multisite_taxonomy (multisite_taxonomy)
 		) ' . $charset_collate . ';';
 
-		$wpdb->query( $multisite_term_multisite_taxonomy_sql );
+		$created = ( false !== $wpdb->query( $multisite_term_multisite_taxonomy_sql ) ) && $created;
+
+		if ( ! $created ) {
+			return false;
+		}
 
 		update_site_option( 'multitaxo_tables_created', 1 );
 
 		// Fresh installs already have the latest schema, so record the current DB version.
-		// Never overwrite an existing (older) version though: the self-heal path can land
-		// here with surviving old-schema tables whose pending migrations must still run.
+		// Never overwrite an existing (older) version though: the repair path can land here
+		// with surviving old-schema tables whose pending migrations must still run.
 		if ( false === get_site_option( 'multitaxo_db_version' ) ) {
 			update_site_option( 'multitaxo_db_version', self::DB_VERSION );
 		}
+
+		return true;
 	}
 
 	/**
@@ -850,17 +905,12 @@ class Multitaxo_Plugin {
 			);
 		}
 
-		$screen = get_current_screen();
-
-		// well this is dumb we are setting the multisite tex only to get it again.
-		$screen->taxonomy = $tax_slug;
-
 		/**
 		 * $post_type is set when the WP_Terms_List_Table instance is created
 		 *
 		 * @global string $post_type
 		 */
-		$this->list_table = new Multisite_Terms_List_Table();
+		$this->list_table = new Multisite_Terms_List_Table( array( 'taxonomy' => $tax_slug ) );
 
 		$pagenum = $this->list_table->get_pagenum();
 		$title   = $mulsite_taxonomy->labels->name;
@@ -1133,25 +1183,10 @@ class Multitaxo_Plugin {
 			$x->send();
 		}
 
-		$args = array();
-
-		if ( isset( $_POST['screen'] ) ) {
-			$args['screen'] = convert_to_screen( sanitize_key( wp_unslash( $_POST['screen'] ) ) );
-		} elseif ( isset( $GLOBALS['hook_suffix'] ) ) {
-			$args['screen'] = get_current_screen();
-		} else {
-			$args['screen'] = null;
-		}
-
-		if ( null !== $args['screen'] ) {
-			$args['screen']->taxonomy = $taxonomy;
-		}
-
 		try {
-			$tax_list_table = new Multisite_Terms_List_Table( $args );
+			$tax_list_table = $this->ajax_list_table( $taxonomy );
 		} catch ( InvalidArgumentException $e ) {
-			// The term was created above; only the response-row rendering could not resolve
-			// its screen. Report it structurally rather than dumping a raw wp_die into the XML.
+			// The term was created above; only its response row cannot be rendered.
 			$this->send_invalid_taxonomy_ajax_error( $taxonomy );
 		}
 
@@ -1186,12 +1221,65 @@ class Multitaxo_Plugin {
 	}
 
 	/**
+	 * Build the term list table for an ajax response.
+	 *
+	 * The taxonomy is passed explicitly, so a missing or stale posted `screen` costs the request
+	 * its per-screen columns instead of failing it. Callers validate the taxonomy first.
+	 *
+	 * @param string $taxonomy Registered multisite taxonomy slug.
+	 * @return Multisite_Terms_List_Table
+	 *
+	 * @throws InvalidArgumentException When the taxonomy is not registered for this request. Callers
+	 *                                  catch it and report it in the shape their client expects.
+	 */
+	private function ajax_list_table( $taxonomy ) {
+		$args   = array( 'taxonomy' => $taxonomy );
+		$screen = null;
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- callers run check_ajax_referer() first.
+		if ( isset( $_POST['screen'] ) ) {
+			$screen = convert_to_screen( sanitize_key( wp_unslash( $_POST['screen'] ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		} elseif ( isset( $GLOBALS['hook_suffix'] ) ) {
+			$screen = get_current_screen();
+		}
+
+		if ( $screen instanceof WP_Screen ) {
+			$screen->taxonomy = $taxonomy;
+			$args['screen']   = $screen;
+		}
+
+		return new Multisite_Terms_List_Table( $args );
+	}
+
+	/**
+	 * End an inline-save request with a message the Quick Edit row can display.
+	 *
+	 * inline-edit-multisite-tax.js treats any response body without a `<tr` as the error text,
+	 * so a bare `wp_die( 0 )` / `wp_die( -1 )` reaches the user as a literal "0" in the row.
+	 * Show the human message, log the developer-facing reason.
+	 *
+	 * @param string $message Message shown in the Quick Edit row.
+	 * @param string $reason  Optional. Developer-facing detail for the log.
+	 * @return void
+	 */
+	private function inline_save_error( $message, $reason = '' ) {
+		if ( '' !== $reason ) {
+			self::log( 'error', $reason, __CLASS__ . '::ajax_inline_save_multisite_tag' );
+		}
+
+		wp_die( esc_html( $message ) );
+	}
+
+	/**
 	 * Add a Update Multisite term in database.
 	 *
 	 * @return void
 	 */
 	public function ajax_inline_save_multisite_tag() {
-		check_ajax_referer( 'ajax_edit_multisite_tax', 'nonce_multisite_inline_edit' );
+		// Checked without $die, so an expired nonce reads as a sentence instead of "-1" in the row.
+		if ( ! check_ajax_referer( 'ajax_edit_multisite_tax', 'nonce_multisite_inline_edit', false ) ) {
+			$this->inline_save_error( __( 'This page has expired. Reload it and try again.', 'multitaxo' ) );
+		}
 
 		if ( isset( $_POST['taxonomy'] ) ) {
 			$taxonomy = sanitize_key( wp_unslash( $_POST['taxonomy'] ) );
@@ -1202,47 +1290,39 @@ class Multitaxo_Plugin {
 		$tax = get_multisite_taxonomy( $taxonomy );
 
 		if ( ! $tax instanceof Multisite_Taxonomy ) {
-			// Inline edit expects a bare status body, but log the reason for the developer.
-			$reason = self::invalid_taxonomy_message( $taxonomy );
-			if ( function_exists( 'spaces_log' ) ) {
-				spaces_log( 'error', $reason, array( '_source' => __METHOD__ ) );
-			} else {
-				error_log( 'multisite_taxonomies: ' . $reason ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			}
-			wp_die( 0 );
+			$this->inline_save_error(
+				__( 'Invalid multisite taxonomy.', 'multitaxo' ),
+				self::invalid_taxonomy_message( $taxonomy )
+			);
 		}
 
 		if ( ! isset( $_POST['tax_id'] ) ) {
-			wp_die( -1 );
+			$this->inline_save_error( __( 'No multisite term was submitted.', 'multitaxo' ) );
 		}
 
 		$id = absint( wp_unslash( $_POST['tax_id'] ) );
 
 		if ( ! current_user_can( 'edit_multisite_term', $id ) ) {
-			wp_die( -1 );
-		}
-
-		$args = array();
-
-		if ( isset( $_POST['screen'] ) ) {
-			$args['screen'] = convert_to_screen( sanitize_key( wp_unslash( $_POST['screen'] ) ) );
-		} elseif ( isset( $GLOBALS['hook_suffix'] ) ) {
-			$args['screen'] = get_current_screen();
-		} else {
-			$args['screen'] = null;
-		}
-
-		if ( null !== $args['screen'] ) {
-			$args['screen']->taxonomy = $taxonomy;
+			$this->inline_save_error( __( 'Sorry, you are not allowed to edit this multisite term.', 'multitaxo' ) );
 		}
 
 		try {
-			$tax_list_table = new Multisite_Terms_List_Table( $args );
+			$tax_list_table = $this->ajax_list_table( $taxonomy );
 		} catch ( InvalidArgumentException $e ) {
-			wp_die( 0 );
+			$this->inline_save_error( __( 'Invalid multisite taxonomy.', 'multitaxo' ), $e->getMessage() );
 		}
 
-		$tag                  = get_multisite_term( $id, $taxonomy );
+		$tag = get_multisite_term( $id, $taxonomy );
+
+		if ( ! $tag || is_wp_error( $tag ) ) {
+			// Most often an id from another multisite taxonomy: reading ->description here would
+			// only produce a notice, and update_multisite_term() a bare "Empty multisite term".
+			$this->inline_save_error(
+				__( 'Item not updated.', 'multitaxo' ),
+				sprintf( 'multisite term %1$d does not exist in taxonomy "%2$s"', $id, $taxonomy )
+			);
+		}
+
 		$_POST['description'] = $tag->description;
 
 		$updated = update_multisite_term( $id, $taxonomy, $_POST );
@@ -2092,12 +2172,7 @@ class Multitaxo_Plugin {
 		$deleted = $wpdb->delete( $wpdb->multisite_term_relationships, array( 'blog_id' => $blog_id ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		if ( false === $deleted ) {
-			$reason = sprintf( 'failed to delete term relationships for deleted blog %d: %s', $blog_id, $wpdb->last_error );
-			if ( function_exists( 'spaces_log' ) ) {
-				spaces_log( 'error', $reason, array( '_source' => __METHOD__ ) );
-			} else {
-				error_log( 'multisite_taxonomies: ' . $reason ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			}
+			self::log( 'error', sprintf( 'failed to delete term relationships for deleted blog %d: %s', $blog_id, $wpdb->last_error ), __METHOD__ );
 			return;
 		}
 

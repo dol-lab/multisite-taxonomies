@@ -181,6 +181,12 @@ inlineEditTax = {
             taxonomy: tax,
 		};
 
+		// The row clone carries the hidden screen field, but send it explicitly too: without a
+		// screen the server cannot rebuild the list table and the save fails.
+		if ( screen ) {
+			params.screen = screen;
+		}
+
 		fields = $('#edit-'+id).find(':input').serialize();
 		params = fields + '&' + $.param(params);
 

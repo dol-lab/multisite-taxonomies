@@ -46,9 +46,11 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 	 * @global string $action
 	 * @global object $mu_tax
 	 *
-	 * @param array $args An associative array of arguments.
+	 * @param array $args An associative array of arguments. Pass `taxonomy` (a registered
+	 *                    multisite taxonomy slug); `screen` only decides the column set.
 	 *
-	 * @throws InvalidArgumentException When the resolved screen has no registered multisite taxonomy.
+	 * @throws InvalidArgumentException When neither the `taxonomy` argument nor the screen names a
+	 *                                  registered multisite taxonomy.
 	 */
 	public function __construct( $args = array() ) {
 		global $post_type, $multisite_taxonomy, $action, $mu_tax;
@@ -61,16 +63,22 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 			)
 		);
 
-		$action             = $this->screen->action; // phpcs:ignore WordPress.WP.GlobalVariablesOverride
-		$post_type          = $this->screen->post_type; // phpcs:ignore WordPress.WP.GlobalVariablesOverride
-		$multisite_taxonomy = $this->screen->taxonomy;
+		$action    = $this->screen->action; // phpcs:ignore WordPress.WP.GlobalVariablesOverride
+		$post_type = $this->screen->post_type; // phpcs:ignore WordPress.WP.GlobalVariablesOverride
+
+		// The taxonomy is an argument, not something smuggled through WP_Screen: over ajax the
+		// screen is rebuilt from a posted id and may carry nothing.
+		$multisite_taxonomy = ! empty( $args['taxonomy'] ) ? $args['taxonomy'] : $this->screen->taxonomy;
 
 		if ( empty( $multisite_taxonomy ) || ! multisite_taxonomy_exists( $multisite_taxonomy ) ) {
 			// Throw rather than wp_die(): this constructor runs inside ajax handlers too, where a
-			// raw die corrupts the XML response. Callers validate the taxonomy first (page context)
-			// or catch this and emit a structured error (ajax context).
+			// raw die corrupts the XML response.
 			throw new InvalidArgumentException( esc_html( Multitaxo_Plugin::invalid_taxonomy_message( $multisite_taxonomy ) ) );
 		}
+
+		// Everything below reads the screen, so keep it in sync with the resolved taxonomy.
+		$this->taxonomy         = $multisite_taxonomy;
+		$this->screen->taxonomy = $multisite_taxonomy;
 
 		$mu_tax = get_multisite_taxonomy( $multisite_taxonomy ); // phpcs:ignore WordPress.WP.GlobalVariablesOverride
 	}

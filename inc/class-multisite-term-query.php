@@ -85,8 +85,8 @@ class Multisite_Term_Query {
 	 * @param string|array $query {
 	 *     Optional. Array or query string of multisite term query parameters. Default empty.
 	 *
-	 *     @type string|array $multisite_taxonomy     Multsite taxonomy name, or array of multisite taxonomies, to which results should
-	 *                                                be limited.
+	 *     @type string|array $taxonomy               Multisite taxonomy name, or array of multisite taxonomies, to which results
+	 *                                                should be limited. `multisite_taxonomy` is accepted as an alias.
 	 *     @type int|array    $object_ids             Optional. Object ID, or array of object IDs. Results will be
 	 *                                                limited to terms associated with these objects.
 	 *     @type string       $orderby                Field(s) to order multisite terms by. Accepts multisite term fields ('name',
@@ -206,6 +206,38 @@ class Multisite_Term_Query {
 	}
 
 	/**
+	 * Accept `multisite_taxonomy` as a spelling of the `taxonomy` query var.
+	 *
+	 * Every other function in this API names the argument `$multisite_taxonomy`, so that is the
+	 * natural guess here as well. Unmapped it would be an unknown query var, silently widening the
+	 * query to the terms of every multisite taxonomy.
+	 *
+	 * @access public
+	 *
+	 * @param array|string $query Query vars.
+	 * @return array|string Query vars with `taxonomy` set.
+	 */
+	public static function normalize_query_args( $query ) {
+		if ( ! is_array( $query ) || ! isset( $query['multisite_taxonomy'] ) ) {
+			return $query;
+		}
+
+		if ( empty( $query['taxonomy'] ) ) {
+			$query['taxonomy'] = $query['multisite_taxonomy'];
+		}
+
+		unset( $query['multisite_taxonomy'] );
+
+		_doing_it_wrong(
+			'Multisite_Term_Query',
+			esc_html__( 'The multisite term query argument is named "taxonomy", not "multisite_taxonomy".', 'multitaxo' ),
+			'0.1.0'
+		);
+
+		return $query;
+	}
+
+	/**
 	 * Parse arguments passed to the multisite term query with default query parameters.
 	 *
 	 * @access public
@@ -216,6 +248,8 @@ class Multisite_Term_Query {
 		if ( empty( $query ) ) {
 			$query = $this->query_vars;
 		}
+
+		$query = self::normalize_query_args( $query );
 
 		$multisite_taxonomies = isset( $query['taxonomy'] ) ? (array) $query['taxonomy'] : null;
 

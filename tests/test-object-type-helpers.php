@@ -4,7 +4,7 @@
  *
  * These are pure functions — no DB rows are touched. They encode the rule that a relationship's
  * ID namespace is '' (post, default/legacy), 'user', or 'blog', and that user/blog rows are
- * network-global (blog_id 0). See plan.md / todo.md.
+ * network-global (blog_id 0).
  *
  * @package multitaxo
  */

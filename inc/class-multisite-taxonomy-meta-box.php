@@ -42,6 +42,45 @@ class Multisite_Taxonomy_Meta_Box {
 	}
 
 	/**
+	 * The taxonomies the shared meta box offers for one object type.
+	 *
+	 * Honours the standard opt-outs the box used to ignore: a taxonomy with `show_ui => false`
+	 * or `meta_box_cb => false` never appears, and the filter lets a plugin drop one per screen
+	 * while keeping it registered (e.g. when a block-editor panel owns the taxonomy and the box
+	 * would be a second, stale selector for it).
+	 *
+	 * The save handlers ask the same question, so a taxonomy the box does not offer is also not
+	 * written from a submitted form.
+	 *
+	 * @param string $object_type 'user', 'blog', or a post type.
+	 *
+	 * @return array Multisite_Taxonomy objects, keyed by taxonomy name.
+	 */
+	public static function taxonomies_for_meta_box( $object_type ) {
+		$taxonomies = (array) get_object_multisite_taxonomies( $object_type, 'objects' );
+
+		foreach ( $taxonomies as $name => $taxonomy ) {
+			$show = $taxonomy->show_ui && false !== $taxonomy->meta_box_cb;
+
+			/**
+			 * Filters whether a taxonomy is offered by the "Multisite Tags" meta box.
+			 *
+			 * Also decides whether the box may save it, so returning false is a complete
+			 * hand-over of the taxonomy to another UI on that screen.
+			 *
+			 * @param bool               $show        Whether to offer the taxonomy.
+			 * @param Multisite_Taxonomy $taxonomy    The taxonomy object.
+			 * @param string             $object_type 'user', 'blog', or a post type.
+			 */
+			if ( ! apply_filters( 'multisite_taxonomy_show_meta_box', $show, $taxonomy, $object_type ) ) {
+				unset( $taxonomies[ $name ] );
+			}
+		}
+
+		return $taxonomies;
+	}
+
+	/**
 	 * Display the metabox container if we should use it.
 	 *
 	 * @param WP_User $profile_user The WP Post type.
@@ -49,8 +88,8 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function add_multisite_taxonomy_meta_box_user( WP_User $profile_user ) {
-		// Only render if there is at least one taxonomy registered for the user object type.
-		if ( count( (array) get_object_multisite_taxonomies( 'user' ) ) <= 0 ) {
+		// Only render if the box offers at least one taxonomy for the user object type.
+		if ( count( self::taxonomies_for_meta_box( 'user' ) ) <= 0 ) {
 			return;
 		}
 
@@ -91,8 +130,8 @@ class Multisite_Taxonomy_Meta_Box {
 	public function add_multisite_taxonomy_meta_box_site( $blog_id ) {
 		$blog_id = (int) $blog_id;
 
-		// Only render if there is at least one taxonomy registered for the blog object type.
-		if ( count( (array) get_object_multisite_taxonomies( 'blog' ) ) <= 0 ) {
+		// Only render if the box offers at least one taxonomy for the blog object type.
+		if ( count( self::taxonomies_for_meta_box( 'blog' ) ) <= 0 ) {
 			return;
 		}
 
@@ -139,7 +178,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function add_multisite_taxonomy_meta_box_post( $post_type, $post ) {
-		$taxonomies = get_object_multisite_taxonomies( $post_type, 'objects' );
+		$taxonomies = self::taxonomies_for_meta_box( $post_type );
 
 		// Show the box if the user can assign at least one of this post type's taxonomies. Each
 		// taxonomy still renders editable or read-only individually (see the meta box callback), so
@@ -210,7 +249,7 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	public function multisite_taxonomy_meta_box_callback( $obj, $metabox = '' ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- Kept for the add_meta_box() callback signature.
-		// Resolve the object id and its ID namespace ('' = post, 'user', 'blog'). See plan.md.
+		// Resolve the object id and its ID namespace ('' = post, 'user', 'blog').
 		if ( is_a( $obj, 'WP_User' ) ) {
 			$obj_id      = (int) $obj->ID;
 			$object_type = 'user';
@@ -225,12 +264,15 @@ class Multisite_Taxonomy_Meta_Box {
 			$object_type = '';
 		}
 
-		// Show only the taxonomies registered for this object type; posts keep the full list.
-		if ( 'user' === $object_type || 'blog' === $object_type ) {
-			$taxonomies = get_object_multisite_taxonomies( $object_type, 'objects' );
-		} else {
-			$taxonomies = get_multisite_taxonomies( array(), 'objects' );
+		// Which taxonomies apply is a question about the post type; '' is only the relationship
+		// namespace posts use.
+		$registered_for = $object_type;
+		if ( '' === $object_type ) {
+			$post           = get_post( $obj_id );
+			$registered_for = $post ? $post->post_type : 'post';
 		}
+
+		$taxonomies = self::taxonomies_for_meta_box( $registered_for );
 
 		$tabs         = array();
 		$tab_contents = array();
@@ -745,8 +787,11 @@ class Multisite_Taxonomy_Meta_Box {
 		// coarse gate here: a submission the user is not allowed to make is simply not written (and
 		// the picker never renders as editable for them in the first place — nothing is dropped).
 
-		// Check if there is a taxonomy registered for this object-type.
-		if ( count( (array) get_object_multisite_taxonomies( $object_type ) ) <= 0 ) {
+		// The box saves only what it offers, so a taxonomy handed to another UI on this screen
+		// cannot be overwritten by the submitted form.
+		$taxonomies = self::taxonomies_for_meta_box( $object_type );
+
+		if ( count( $taxonomies ) <= 0 ) {
 			return $obj_id;
 		}
 
@@ -763,13 +808,15 @@ class Multisite_Taxonomy_Meta_Box {
 
 		// New-style support for all custom taxonomies.
 		foreach ( $multi_tax_input as $taxonomy => $terms ) {
-			$taxonomy_obj = get_multisite_taxonomy( $taxonomy );
-
-			if ( ! $taxonomy_obj ) {
-				/* translators: %s: taxonomy name */
-				_doing_it_wrong( __FUNCTION__, esc_html( sprintf( __( 'Invalid multisite-taxonomy: %s.', 'multitaxo' ), $taxonomy ) ), '4.4.0' );
+			if ( ! isset( $taxonomies[ $taxonomy ] ) ) {
+				if ( ! get_multisite_taxonomy( $taxonomy ) ) {
+					/* translators: %s: taxonomy name */
+					_doing_it_wrong( __FUNCTION__, esc_html( sprintf( __( 'Invalid multisite-taxonomy: %s.', 'multitaxo' ), $taxonomy ) ), '4.4.0' );
+				}
 				continue;
 			}
+
+			$taxonomy_obj = $taxonomies[ $taxonomy ];
 
 			// array = hierarchical, string = non-hierarchical.
 			if ( is_array( $terms ) ) {
@@ -858,12 +905,14 @@ class Multisite_Taxonomy_Meta_Box {
 			return;
 		}
 
-		foreach ( $multi_tax_input as $taxonomy => $terms ) {
-			$taxonomy_obj = get_multisite_taxonomy( $taxonomy );
+		$taxonomies = self::taxonomies_for_meta_box( 'blog' );
 
-			if ( ! $taxonomy_obj ) {
+		foreach ( $multi_tax_input as $taxonomy => $terms ) {
+			if ( ! isset( $taxonomies[ $taxonomy ] ) ) {
 				continue;
 			}
+
+			$taxonomy_obj = $taxonomies[ $taxonomy ];
 
 			if ( current_user_can_assign_multisite_terms( $taxonomy_obj, 'blog' ) ) {
 				// Blog relationships live in the 'blog' namespace at blog_id = 0 (forced by set_object_multisite_terms).

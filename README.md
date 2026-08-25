@@ -1,205 +1,306 @@
 # Multisite Taxonomies
-## A WordPress plugin
-Multisite Taxonomies brings the ability to register custom taxonomies, accessible on an entire multisite network, to WordPress.
 
-Master branch: [![CircleCI](https://circleci.com/gh/HarvardChanSchool/multisite-taxonomies.svg?style=svg)](https://circleci.com/gh/HarvardChanSchool/multisite-taxonomies)
+Multisite Taxonomies provides network-wide custom taxonomies for WordPress Multisite. Terms are
+stored once for the network and can be assigned to posts, users, or sites without duplicating the
+taxonomy on every site.
 
-## Coding standards
-We follow [WordPress Coding Standards](https://github.com/WordPress-Coding-Standards/WordPress-Coding-Standards) and enforce them using PHP Code Sniffer.
+The plugin provides the storage, administration screens, relationship APIs, and optional front-end
+archives. It does not register a taxonomy by itself; applications register the taxonomies they need
+with `register_multisite_taxonomy()`.
 
-To test localy simply run:
-- `$ composer install` (if you haven't already)
-- `$ ./vendor/bin/phpcs ./`
+## Requirements
 
-### Dependencies:
-- [Composer](https://getcomposer.org/doc/00-intro.md#installation-linux-unix-osx) (globally installed)
+- WordPress Multisite
+- Network activation
 
-### How to get started?
-- Start by copying the plugin to your website's WordPress plugin directory.
-- Activate the plugin. 
-- A Multisite Taxonomy menu will appear in the admin but it will be blank. 
-- Add taxonomies to the website by using register_multisite_taxonomy called on the `init` hook. We would recommend doing this in a separate plugin of your creation. 
-- Multisite tags can then be added to posts through the post edit screen on any site on the network.
+## Installation
 
-### Register Taxonomy Example:
+1. Copy the plugin to `wp-content/plugins/multisite-taxonomies` or install it with Composer.
+2. Network-activate **Multisite Taxonomies**.
+3. Register at least one taxonomy, preferably from a separate plugin.
+
+The network administration menu remains empty until a taxonomy has been registered.
+
+## Registering a taxonomy
+
+Register multisite taxonomies on `init`, just like native WordPress taxonomies:
 
 ```php
-add_action( 'init', 'register_multisite_taxonomies', 0 );
+add_action( 'init', 'register_network_topics', 0 );
 
-/**
- * Load in all taxonomies.
- *
- * @return void
- */
-function register_multisite_taxonomies() {
-    /**
-     * Load taxonomy for Tags
-     */
-    $labels     = array(
-        'name'                       => __( 'Tags', 'hsph-plugin-tagging' ),
-        'singular_name'              => __( 'Tag', 'hsph-plugin-tagging' ),
-        'menu_name'                  => __( 'Tags', 'hsph-plugin-tagging' ),
-        'all_items'                  => __( 'All Tags', 'hsph-plugin-tagging' ),
-        'new_item_name'              => __( 'New Tag Name', 'hsph-plugin-tagging' ),
-        'add_new_item'               => __( 'Add New Tag', 'hsph-plugin-tagging' ),
-        'edit_item'                  => __( 'Edit Tag', 'hsph-plugin-tagging' ),
-        'update_item'                => __( 'Update Tag', 'hsph-plugin-tagging' ),
-        'view_item'                  => __( 'View Tag', 'hsph-plugin-tagging' ),
-        'separate_items_with_commas' => __( 'Separate tags with commas', 'hsph-plugin-tagging' ),
-        'add_or_remove_items'        => __( 'Add or remove tags', 'hsph-plugin-tagging' ),
-        'choose_from_most_used'      => __( 'Choose from the most used tags', 'hsph-plugin-tagging' ),
-        'popular_items'              => __( 'Popular Tags', 'hsph-plugin-tagging' ),
-        'search_items'               => __( 'Search Tags', 'hsph-plugin-tagging' ),
-        'not_found'                  => __( 'No Tags Found', 'hsph-plugin-tagging' ),
-        'no_terms'                   => __( 'No tags for this category', 'hsph-plugin-tagging' ),
-        'most_used'                  => __( 'Most Used', 'hsph-plugin-tagging' ),
-        'items_list'                 => __( 'Tags list', 'hsph-plugin-tagging' ),
-        'items_list_navigation'      => __( 'Tags list navigation', 'hsph-plugin-tagging' ),
-    );
+function register_network_topics() {
+	$labels = array(
+		'name'          => __( 'Topics', 'example-plugin' ),
+		'singular_name' => __( 'Topic', 'example-plugin' ),
+		'menu_name'     => __( 'Topics', 'example-plugin' ),
+		'all_items'     => __( 'All Topics', 'example-plugin' ),
+		'add_new_item'  => __( 'Add New Topic', 'example-plugin' ),
+		'edit_item'     => __( 'Edit Topic', 'example-plugin' ),
+		'update_item'   => __( 'Update Topic', 'example-plugin' ),
+		'search_items'  => __( 'Search Topics', 'example-plugin' ),
+	);
 
-    $args       = array(
-        'labels'       => $labels,
-        'hierarchical' => false,
-    );
-    
-    $post_types = apply_filters( 'multisite_taxonomy_tags_post_types', array( 'post' ) );
-    register_multisite_taxonomy( 'tag', $post_types, $args );
+	register_multisite_taxonomy(
+		'network_topic',
+		array( 'post', 'user', 'blog' ),
+		array(
+			'labels'             => $labels,
+			'hierarchical'       => false,
+			'publicly_queryable' => true,
+		)
+	);
 }
 ```
 
-### Object types (posts, users, and blogs)
+The second registration argument accepts post types such as `post` or `page`, plus the special
+network object types `user` and `blog`. Relationship functions use these ID namespaces:
 
-A single multisite taxonomy can be shared across more than one kind of object. Every
-relationship is stored with an `object_type` that namespaces the object ID:
+| `object_type` argument | Object ID refers to | Stored `blog_id` |
+| --- | --- | --- |
+| `''` (default) | A post on a site | The site's ID |
+| `'user'` | A network user | `0` (network-global) |
+| `'blog'` | A site in the network | `0` (network-global) |
 
-| `object_type` | Object ID refers to | `blog_id` stored |
-| ------------- | ------------------- | ---------------- |
-| `''` (default) | a post on a blog   | the blog's ID    |
-| `'user'`       | a network user      | `0` (network-global) |
-| `'blog'`       | a blog/site         | `0` (network-global) |
+All registered post types share the default `''` relationship namespace. A taxonomy may support
+several object types at once; the namespace keeps identical numeric IDs for posts, users, and sites
+separate.
 
-Pass the `object_type` as the last argument to the relationship functions. It defaults to
-`''` (the post namespace), so existing post code keeps working unchanged. The `blog_id`
-argument is ignored for `'user'` and `'blog'` rows — they are always network-global.
+Taxonomies used by network-admin or AJAX requests must also be registered during those requests.
+`is_network_admin()` is false in `admin-ajax.php`; `Multitaxo_Plugin::is_crud_request()` can be used
+when conditionally registering a taxonomy for the term-management screens.
+
+## The "Multisite Tags" meta box
+
+One shared meta box edits every applicable taxonomy: on the post editor, on the user profile
+screens, and inside the Network Admin site-info form. It offers only the taxonomies registered for
+that object type (a `blog` taxonomy never shows up on a post), and it skips a taxonomy registered
+with `show_ui => false` or `meta_box_cb => false`.
+
+For a per-screen decision, filter it:
 
 ```php
-// Assign the "design" affiliation to a post (post namespace — the default).
-set_object_multisite_terms( $post_id, 'design', 'affiliation' );
+// A block-editor panel of our own edits this taxonomy on the post screens.
+add_filter( 'multisite_taxonomy_show_meta_box', function ( $show, $taxonomy, $object_type ) {
+	if ( 'network_topic' === $taxonomy->name && 'post' === $object_type ) {
+		return ! in_array( $GLOBALS['pagenow'], array( 'post.php', 'post-new.php' ), true );
+	}
+	return $show;
+}, 10, 3 );
+```
 
-// Assign the same term to a user (network-global; blog_id is forced to 0).
-set_object_multisite_terms( $user_id, 'design', 'affiliation', 0, false, 'user' );
+The box's save handlers ask the same question, so returning `false` hands the taxonomy over
+completely: the box neither renders nor writes it. That matters with the block editor, which posts
+the meta-box form back to `post.php` *after* its REST save, so a hidden-but-still-saving box would
+overwrite whatever the panel just stored.
 
-// ...and to a whole blog/site.
-set_object_multisite_terms( $blog_id, 'design', 'affiliation', 0, false, 'blog' );
+Note that `$pagenow` is the reliable signal on those screens; the current screen's
+`is_block_editor()` flag is unset at `init` (when taxonomies register) and on the meta-box submit.
 
-// Read a user's terms back. Reads never cross namespaces, so this returns only
-// the user's relationships — not the post or blog with the same numeric ID.
-$user_terms = get_object_multisite_terms( $user_id, 'affiliation', 0, array(), 'user' );
+## Working with terms
 
-// Restrict a term query to the user namespace via object_type. Filtering only kicks
-// in alongside object_ids, so reads stay byte-compatible with existing post queries.
-$user_terms_only = get_multisite_terms(
-    array(
-        'taxonomy'    => 'affiliation',
-        'object_ids'  => $user_id,
-        'object_type' => 'user',
-    )
+The relationship functions use the same basic pattern as the WordPress term APIs. Their last
+argument selects the object namespace and defaults to posts:
+
+```php
+// Assign a term to a post on the current site.
+set_object_multisite_terms( $post_id, 'design', 'network_topic' );
+
+// Assign the same network term to a user and a site.
+set_object_multisite_terms( $user_id, 'design', 'network_topic', 0, false, 'user' );
+set_object_multisite_terms( $site_id, 'design', 'network_topic', 0, false, 'blog' );
+
+// Read only the user's relationships.
+$terms = get_object_multisite_terms( $user_id, 'network_topic', 0, array(), 'user' );
+```
+
+For a taxonomy registered exclusively for users or exclusively for sites, the namespace is inferred
+when it is omitted. For a taxonomy supporting multiple namespaces, pass it explicitly for user and
+site operations.
+
+`get_multisite_terms()` accepts both the plugin's argument-array form and the familiar WordPress
+forms:
+
+```php
+$terms = get_multisite_terms( array( 'taxonomy' => 'network_topic' ) );
+$terms = get_multisite_terms( 'network_topic' );
+$terms = get_multisite_terms( 'network_topic', array( 'hide_empty' => false ) );
+```
+
+The canonical query key is `taxonomy`. The legacy `multisite_taxonomy` key remains available as a
+deprecated alias.
+
+To query relationships for a specific namespace, combine `object_ids` and `object_type`:
+
+```php
+$terms = get_multisite_terms(
+	array(
+		'taxonomy'    => 'network_topic',
+		'object_ids'  => array( $user_id ),
+		'object_type' => 'user',
+	)
 );
 ```
 
-If a taxonomy is registered for exactly one of `'user'` or `'blog'`, you may omit the
-`object_type` argument entirely and it will be inferred from the taxonomy.
+## Front-end archives
 
-### URLs and term archives
+A taxonomy registered with `publicly_queryable => true` receives a term URL on each site:
 
-A publicly queryable taxonomy registers a per-taxonomy permastruct and query var, so every
-term has a front-end archive URL. The structure is:
-
-```
+```text
 <home_url>/multitaxo/<taxonomy-rewrite-slug>/<term-slug>/
 ```
 
-`home_url()` is the **current blog's** home, so the same term resolves to a different URL on
-each site — `…/site-a/multitaxo/affiliation/design/` vs `…/site-b/multitaxo/affiliation/design/`
-— and each archive lists only that blog's posts. (`multitaxo` is the shared base slug,
-overridable via the `multisite_taxonomy_base_url_slug` filter.)
-
-Build the URL with `get_multisite_term_link()`. The term object already carries its
-`multisite_taxonomy`, so you don't pass the taxonomy explicitly:
+The base segment defaults to `multitaxo` and can be changed with the
+`multisite_taxonomy_base_url_slug` filter. Build links with `get_multisite_term_link()`:
 
 ```php
-$link = get_multisite_term_link( $term );   // string URL, or WP_Error if the term is invalid
+$link = get_multisite_term_link( $term );
+
 if ( ! is_wp_error( $link ) ) {
-    printf( '<a href="%s">%s</a>', esc_url( $link ), esc_html( $term->name ) );
+	printf( '<a href="%s">%s</a>', esc_url( $link ), esc_html( $term->name ) );
 }
 ```
 
-`Multisite_Taxonomy_Archive` (`inc/class-multisite-taxonomy-archive.php`) turns a hit on that
-permastruct into a normal posts archive for the current blog: it sets `is_archive`, scopes the
-main loop to the term via `posts_clauses`, lets a theme override the template
-(`multisite-taxonomy-<tax>.php` → `multisite-taxonomy.php` → the theme's archive), and 404s on
-an unknown slug. The blog root is left untouched, so a front-page `?affiliation=` stream is not
-hijacked. Check the request with `is_multisite_taxonomy_archive()` /
-`get_queried_multisite_term()`.
+The default archive lists posts belonging to the current site. User and site archives select their
+namespace with a query argument:
 
-#### How the URL distinguishes posts, users, and blogs
+| Archive | URL |
+| --- | --- |
+| Posts | `.../multitaxo/network_topic/design/` |
+| Users | `.../multitaxo/network_topic/design/?multisite_object_type=user` |
+| Sites | `.../multitaxo/network_topic/design/?multisite_object_type=blog` |
 
-The path itself does **not** encode the object type — that is deliberate, so the clean URL
-stays backwards compatible. The namespace rides along in an optional `multisite_object_type`
-query var on the same URL:
+User and site archives expose network-wide objects and are therefore restricted to super admins.
+Requests for a namespace the taxonomy does not support return a 404.
 
-| Object type | URL                                                        |
-| ----------- | ---------------------------------------------------------- |
-| post (default) | `…/multitaxo/affiliation/design/`                       |
-| user        | `…/multitaxo/affiliation/design/?multisite_object_type=user` |
-| blog        | `…/multitaxo/affiliation/design/?multisite_object_type=blog` |
+Themes may provide archive templates in this order:
 
-An absent or empty `multisite_object_type` means posts (`object_type=''`), so any link built
-before object types existed — and every plain `get_multisite_term_link()` URL — keeps resolving
-to a posts archive.
-
-#### Users and sites archives
-
-`?multisite_object_type=user` and `=blog` render an archive of the **users** / **sites** assigned
-to the term, but only when the taxonomy is registered for that namespace
-(`multisite_taxonomy_supports_object_type()`); a request for an unsupported namespace is rejected
-with an explicit 404 (`wp_die`) rather than silently falling back to a posts archive.
-
-Because these archives list network-global objects (users/sites across the whole network), they
-are **restricted to super admins** — a non-super-admin request is denied with a 403. The plain
-posts archive (default URL, no `multisite_object_type`) is unaffected and stays public.
-
-These namespaces have no native WordPress loop, so the controller does not run a posts query for
-them. Instead it loads the network-global `WP_User` / `WP_Site` objects itself (paginated via the
-relationship table), neutralizes the main posts query, and corrects the main query's
-`found_posts` / `max_num_pages` so the theme's normal `the_posts_pagination()` works. Pagination
-uses the permastruct's `/page/N/`; a request past the last page 404s like any archive.
-
-Template lookup is object-type aware and falls back to a bundled template so the route works on
-any theme out of the box:
-
-```
-user: multisite-taxonomy-user-<tax>.php → multisite-taxonomy-user.php ┐
-blog: multisite-taxonomy-blog-<tax>.php → multisite-taxonomy-blog.php ┤→ multisite-taxonomy-<tax>.php
-                                                                      ┘→ multisite-taxonomy.php
-                                                  → (plugin) templates/multisite-taxonomy-objects.php
+```text
+multisite-taxonomy-user-<taxonomy>.php
+multisite-taxonomy-user.php
+multisite-taxonomy-blog-<taxonomy>.php
+multisite-taxonomy-blog.php
+multisite-taxonomy-<taxonomy>.php
+multisite-taxonomy.php
 ```
 
-A theme template (or the bundled one) builds its list with these template tags:
+If no theme template matches a user or site archive, the plugin uses
+`templates/multisite-taxonomy-objects.php`. Relevant template helpers include:
 
 ```php
-if ( is_multisite_taxonomy_object_archive() ) {
-    $type    = get_queried_multisite_object_type();          // 'user' or 'blog'
-    $objects = get_multisite_taxonomy_archive_objects();     // WP_User[] | WP_Site[] for this page
-    foreach ( $objects as $object ) {
-        // $object is a WP_User or WP_Site; render it.
-    }
-    the_posts_pagination();                                  // works against the corrected totals
-}
+is_multisite_taxonomy_archive();
+get_queried_multisite_term();
+is_multisite_taxonomy_object_archive();
+get_queried_multisite_object_type();
+get_multisite_taxonomy_archive_objects();
 ```
 
-The bundled template emits one `multisite_taxonomy_archive_object_item` filter per row so consumers
-can customize the markup without copying the whole template. The underlying paginated reader is
-`get_multisite_term_object_ids( $term_id, $tax, $object_type, $args )` (returns `ids` + `total`),
-and `multisite_taxonomy_archive_objects_per_page` filters the page size (defaults to the
-"Blog pages show at most" setting).
+The `multisite_taxonomy_archive_object_item` filter customizes a row in the bundled template, and
+`multisite_taxonomy_archive_objects_per_page` controls its page size.
+
+## Term settings
+
+Applications can register boolean settings stored on individual terms:
+
+```php
+register_multisite_term_setting(
+	'network_topic',
+	'featured',
+	array(
+		'label'       => __( 'Featured', 'example-plugin' ),
+		'description' => __( 'Highlight objects assigned to this topic.', 'example-plugin' ),
+		'default'     => false,
+	)
+);
+
+$featured = get_multisite_term_setting( $term_id, 'featured', false );
+```
+
+Registered settings appear on the network term add and edit screens and are stored in the network
+term-meta table. Programmatic term updates do not overwrite them unless the settings fields are
+submitted.
+
+## Capabilities
+
+Taxonomy capabilities are configured through the `capabilities` registration argument. Assignment
+checks are resolved by:
+
+```php
+get_multisite_taxonomy_assign_cap( $taxonomy, $object_type );
+current_user_can_assign_multisite_terms( $taxonomy, $object_type );
+```
+
+Use the `multisite_taxonomy_assign_cap` filter to vary assignment permission by namespace. For
+example, a taxonomy can require network-management permission for user relationships while allowing
+editors to assign the same terms to posts. The filter receives the registered taxonomy object:
+
+```php
+add_filter(
+	'multisite_taxonomy_assign_cap',
+	function ( $capability, $taxonomy, $object_type ) {
+		if ( $taxonomy instanceof Multisite_Taxonomy
+			&& 'network_topic' === $taxonomy->name
+			&& 'user' === $object_type
+		) {
+			return 'manage_network';
+		}
+
+		return $capability;
+	},
+	10,
+	3
+);
+```
+
+When a user can view but cannot assign a taxonomy, the editor displays its current terms as a
+read-only list. The explanatory text can be changed with `multisite_taxonomy_read_only_note`.
+
+## Cross-site post queries
+
+`Multisite_WP_Query` queries related posts across the network. By default it includes published,
+password-free posts from publicly queryable post types; user and site relationships are excluded.
+
+- `multisite_wp_query_access` may return a `WP_Error` to reject a query before it or its cache runs.
+- `multisite_wp_query_post_types` changes the public post types included for each source site.
+
+Installations with additional site-privacy rules should use the access filter to verify every source
+site before allowing an aggregated query.
+
+## Database tables
+
+The plugin stores terms, term metadata, taxonomy records, and relationships in four
+`<network-prefix>multisite_*` tables. Network activation creates the schema. On administration, cron,
+and WP-CLI requests, the plugin periodically verifies that the tables still exist and recreates a
+missing schema. A repair is logged because recreating a table cannot restore its former data.
+
+Deleting a site removes that site's post relationships. User and site relationships are
+network-global and use `blog_id = 0`.
+
+## Logging
+
+The plugin logs the few things a developer must see (a repaired schema, a failed write) through the
+`multitaxo_log` action, and writes to `error_log()` only while nothing is hooked:
+
+```php
+add_action( 'multitaxo_log', function ( $level, $message, $source ) {
+	my_logger( $level, $message, $source ); // $level is a PSR-3 level, $source a caller id.
+}, 10, 3 );
+```
+
+The plugin has no knowledge of the host's logger, so an install with its own logging keeps these
+lines out of `error_log()` by hooking the action.
+
+## Development
+
+Install development dependencies and run the coding-standard checks:
+
+```sh
+composer install
+vendor/bin/phpcs --standard=phpcs.xml .
+```
+
+The PHPUnit suite requires the WordPress test library and runs in multisite mode:
+
+```sh
+composer install-test
+vendor/bin/phpunit -c multisite.xml
+```

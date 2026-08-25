@@ -4,8 +4,8 @@
  *
  * Verifies that set_/add_/remove_/get_object_multisite_terms() carry the namespace through every
  * write and read: user/blog rows land at blog_id 0 with the right object_type, post rows keep an
- * explicit blog_id with object_type '', and reads never cross namespaces. This is the behavior the
- * todo.md "live verification" item asked for, pinned down as a regression guard.
+ * explicit blog_id with object_type '', and reads never cross namespaces. These tests guard
+ * relationship creation and retrieval against regressions.
  *
  * @package multitaxo
  */

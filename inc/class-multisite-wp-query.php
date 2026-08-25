@@ -87,6 +87,9 @@ class Multisite_WP_Query {
 			'update_cache'       => true,
 			'cache'              => true,
 		);
+		$this->query_vars         = array();
+		$this->blogs_data         = array();
+		$this->posts              = array();
 		$this->cache_key          = '';
 
 		// Run the query if parameters were passed to the constructor.
@@ -111,7 +114,7 @@ class Multisite_WP_Query {
 		$query_vars = wp_parse_args( $query_vars, $this->query_var_defaults );
 
 		if ( is_array( $query_vars['multisite_term_ids'] ) ) {
-			array_walk( $query_vars['multisite_term_ids'], 'absint' );
+			$query_vars['multisite_term_ids'] = array_filter( array_map( 'absint', $query_vars['multisite_term_ids'] ) );
 		} else {
 			return new WP_Error( 'multisite_wp_query_terms_required', __( 'No Multisite Terms IDs passed to query.', 'multitaxo' ) );
 		}
@@ -149,7 +152,8 @@ class Multisite_WP_Query {
 			$query_vars['update_cache'] = true;
 		}
 
-		$this->cache_key = md5( wp_json_encode( $query_vars ) );
+		// Include a schema marker so caches created by the older, less restrictive query are ignored.
+		$this->cache_key = md5( '2:' . wp_json_encode( $query_vars ) );
 
 		return $query_vars;
 	}
@@ -160,11 +164,35 @@ class Multisite_WP_Query {
 	 * @access public
 	 *
 	 * @param string|array $query_vars Array or URL query string of parameters.
-	 * @return array|int|WP_Error List of multisite terms, or number of multisite terms when 'count' is passed as a query var.
+	 * @return void|WP_Error Error when parsing or an access policy rejects the query.
 	 */
 	public function query( $query_vars ) {
 
 		global $wpdb;
+
+		/**
+		 * Filters whether a cross-blog post query may run.
+		 *
+		 * This runs before argument parsing and cache access. Integrations whose access rules
+		 * cannot safely be represented by this query should return a WP_Error.
+		 *
+		 * @param true|WP_Error      $access     True to continue, or an error to stop.
+		 * @param mixed              $query_vars Raw query arguments.
+		 * @param Multisite_WP_Query $query      Query instance.
+		 */
+		$access = apply_filters( 'multisite_wp_query_access', true, $query_vars, $this );
+
+		if ( is_wp_error( $access ) ) {
+			$this->posts      = array();
+			$this->blogs_data = array();
+			return $access;
+		}
+
+		if ( true !== $access ) {
+			$this->posts      = array();
+			$this->blogs_data = array();
+			return new WP_Error( 'multisite_wp_query_forbidden', __( 'This multisite post query is not available in the current access context.', 'multitaxo' ) );
+		}
 
 		$this->query_vars = $this->parse_query( $query_vars );
 
@@ -178,10 +206,15 @@ class Multisite_WP_Query {
 			// We set a default empty result.
 			$this->posts = array();
 
-			// First we get the posts associated to the multisite_term_ids received in the query.
-			// $wpdb->prepare() will not work here because as documentation says: "One example is preparing an array for use in an IN clause".
-			// so we have to use esc_sql instead.
-			$results = $wpdb->get_results( 'SELECT * FROM ' . $wpdb->multisite_term_relationships . " WHERE multisite_term_multisite_taxonomy_id IN ( '" . join( "', '", esc_sql( $this->query_vars['multisite_term_ids'] ) ) . "' )" );
+			// Only post relationships belong in this query. User and site IDs share the same
+			// numeric namespace and can otherwise collide with unrelated post IDs.
+			$term_placeholders = implode( ', ', array_fill( 0, count( $this->query_vars['multisite_term_ids'] ), '%d' ) );
+			$results           = $wpdb->get_results( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+				$wpdb->prepare(
+					"SELECT * FROM {$wpdb->multisite_term_relationships} WHERE multisite_term_multisite_taxonomy_id IN ($term_placeholders) AND object_type = ''", // phpcs:ignore -- Table name and a generated list of %d placeholders.
+					$this->query_vars['multisite_term_ids']
+				)
+			);
 
 			// If the multisite term is associated with some posts.
 			if ( is_array( $results ) && ! empty( $results ) ) {
@@ -204,16 +237,36 @@ class Multisite_WP_Query {
 							$this->blogs_data[ absint( $blog_id ) ] = array();
 						}
 						if ( is_array( $posts ) && ! empty( $posts ) ) {
-							$posts             = $this->filter_posts_with_exclude( $posts, $blog_id );
+							$posts = $this->filter_posts_with_exclude( $posts, $blog_id );
+							if ( empty( $posts ) ) {
+								continue;
+							}
+
+							/**
+							 * Filters the publicly queryable post types included for a blog.
+							 *
+							 * @param string[]           $post_types Publicly queryable post type names.
+							 * @param int                $blog_id    Source blog ID.
+							 * @param array              $query_vars Parsed query arguments.
+							 * @param Multisite_WP_Query $query      Query instance.
+							 */
+							$post_types = apply_filters( 'multisite_wp_query_post_types', get_post_types( array( 'publicly_queryable' => true ) ), absint( $blog_id ), $this->query_vars, $this );
+							$post_types = array_filter( array_map( 'sanitize_key', (array) $post_types ) );
+							if ( empty( $post_types ) ) {
+								continue;
+							}
+
 							$post_ids          = implode( ',', $posts );
-							$query_per_blogs[] = 'SELECT p.ID,p.post_date,p.post_content,p.post_title,p.post_excerpt,p.post_name,p.post_type,m2.meta_value AS post_thumbnail,(@blog_id := ' . absint( $blog_id ) . ') AS blog_id FROM ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'posts as p LEFT OUTER JOIN ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'postmeta as m ON p.ID=m.post_id AND m.meta_key="_thumbnail_id" LEFT OUTER JOIN ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'postmeta as m2 ON m.meta_value=m2.post_id AND m2.meta_key="_wp_attachment_metadata" WHERE p.ID IN( ' . $post_ids . ' ) AND p.post_status=\'publish\'';
+							$post_types_sql    = "'" . implode( "','", esc_sql( $post_types ) ) . "'";
+							$query_per_blogs[] = 'SELECT p.ID,p.post_date,p.post_content,p.post_title,p.post_excerpt,p.post_name,p.post_type,m2.meta_value AS post_thumbnail,' . absint( $blog_id ) . ' AS blog_id FROM ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'posts as p LEFT OUTER JOIN ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'postmeta as m ON p.ID=m.post_id AND m.meta_key="_thumbnail_id" LEFT OUTER JOIN ' . $wpdb->get_blog_prefix( absint( $blog_id ) ) . 'postmeta as m2 ON m.meta_value=m2.post_id AND m2.meta_key="_wp_attachment_metadata" WHERE p.ID IN( ' . $post_ids . ' ) AND p.post_status=\'publish\' AND p.post_password=\'\' AND p.post_type IN( ' . $post_types_sql . ' )';
 						}
 					}
 					if ( ! empty( $query_per_blogs ) ) {
 						$db_posts_query = implode( ' UNION ', $query_per_blogs );
+						$db_posts_query = 'SELECT * FROM (' . $db_posts_query . ') AS multisite_query ' . $this->get_query_order() . ' ' . $this->get_query_limit();
+						$db_results      = $wpdb->get_results( $db_posts_query ); // phpcs:ignore -- Query is built from integer IDs and fixed SQL fragments above.
+						$this->posts    = $this->process_posts( $db_results );
 					}
-					$db_posts_query = 'SELECT * FROM (' . $db_posts_query . ') AS multisite_query ' . $this->get_query_order() . ' ' . $this->get_query_limit();
-					$this->posts    = $this->process_posts( $wpdb->get_results( $db_posts_query ) );
 				}
 			}
 			// We set the cache if we have to.
@@ -422,7 +475,7 @@ class Multisite_WP_Query {
 	 * Get the post thumbnail in the mulsite query context.
 	 *
 	 * @access protected
-	 * @param int $post_thumbnail_meta The post thumbnail meta fetched from the database.
+	 * @param string $post_thumbnail_meta The post thumbnail meta fetched from the database.
 	 * @param int $blog_id The blog ID the post belong to.
 	 *
 	 * @return array|false An array containing the thumbnail attributes or false if no thumbnail was found.
@@ -430,7 +483,7 @@ class Multisite_WP_Query {
 	protected function process_post_thumbnail( $post_thumbnail_meta, $blog_id ) {
 
 		if ( ! empty( $post_thumbnail_meta ) ) {
-			$post_thumbnail_meta = unserialize( $post_thumbnail_meta ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize
+			$post_thumbnail_meta = unserialize( $post_thumbnail_meta, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize
 			if ( is_array( $post_thumbnail_meta ) && isset( $post_thumbnail_meta['file'] ) && ! empty( $post_thumbnail_meta['file'] ) ) {
 				$post_thumbnail        = array();
 				$post_thumbnail['url'] = multitaxo_content_url() . '/' . absint( $blog_id ) . '/' . $post_thumbnail_meta['file'];

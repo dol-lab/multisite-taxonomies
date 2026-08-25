@@ -988,7 +988,8 @@ function get_multisite_term_to_edit( $id, $multisite_taxonomy ) {
  * @global array $wp_filter
  *
  * @param array|string $args {
- *     Optional. Array or string of arguments to get multisite terms.
+ *     Optional. Array or string of arguments to get multisite terms. A bare taxonomy slug (or array
+ *     of slugs) is also accepted, as in core's get_terms().
  *
  *     @type string|array $multisite_taxonomy     Multisite taxonomy name, or array of multisite taxonomies, to which results should
  *                                                be limited.
@@ -1050,10 +1051,12 @@ function get_multisite_term_to_edit( $id, $multisite_taxonomy ) {
  *     @type string       $meta_value             Limit multisite terms to those matching a specific metadata value. Usually used
  *                                                in conjunction with `$meta_key`.
  * }
+ * @param array|string $deprecated Optional. Argument array, when using the legacy
+ *                                 `( $taxonomy, $args )` parameter format. Default empty.
  * @return array|int|WP_Error List of Multisite_Term instances and their children. Will return WP_Error, if any of $multisite_taxonomies
  *                            do not exist.
  */
-function get_multisite_terms( $args = array() ) {
+function get_multisite_terms( $args = array(), $deprecated = '' ) {
 	global $wpdb;
 
 	$multisite_term_query = new Multisite_Term_Query();
@@ -1062,6 +1065,20 @@ function get_multisite_terms( $args = array() ) {
 		'suppress_filter' => false,
 		'taxonomy'        => array(),
 	);
+
+	$args = Multisite_Term_Query::normalize_query_args( $args );
+
+	// Legacy signature, as in core get_terms(): ( $taxonomy ) or ( $taxonomy, $args ). Recognized by
+	// the absence of any known query var, so a plain slug does not end up querying every taxonomy.
+	$_args = wp_parse_args( $args );
+
+	if ( $deprecated || ! array_intersect_key( $multisite_term_query->query_var_defaults, (array) $_args ) ) {
+		$taxonomies       = (array) $args;
+		$args             = Multisite_Term_Query::normalize_query_args( wp_parse_args( $deprecated ) );
+		$args['taxonomy'] = $taxonomies;
+	} else {
+		$args = $_args;
+	}
 
 	$args = wp_parse_args( $args, $defaults );
 
@@ -1207,9 +1224,7 @@ function update_multisite_termmeta_cache( $multisite_term_ids ) {
  * A behavior is a boolean flag a term carries in its meta. It renders as a checkbox
  * in a "Behaviors" section on the term add/edit screen and is persisted to
  * `multisite_termmeta`, so any consumer can read it back with
- * {@see get_multisite_term_setting()} or join the meta table directly. The first
- * intended use is spaces-core's `blog_term` taxonomy, where a term applies the flag
- * to every blog tagged with it.
+ * {@see get_multisite_term_setting()} or join the meta table directly.
  *
  * @return array Registry passed by reference so registration can mutate it.
  */
@@ -1941,7 +1956,7 @@ function delete_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
  * @param int          $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
  * @param array|string $args See Multisite_Term_Query::__construct() for supported arguments.
  * @param string       $object_type Optional. ID namespace to restrict to: '' (post, default), 'user', or 'blog'.
- *                                  For a single-namespace taxonomy it is inferred when omitted. See plan.md.
+ *                                  For a single-namespace taxonomy it is inferred when omitted.
  * @return array|WP_Error The requested multisite term data or empty array if no multisite terms found.
  *                        WP_Error if any of the $multisite_taxonomies don't exist.
  */
@@ -2330,7 +2345,7 @@ function insert_multisite_term( $multisite_term, $multisite_taxonomy, $args = ar
  * The column records the ID namespace of `object_id`, not the WP post type:
  * '' = post namespace (post, page, any CPT), 'user' = wp_users, 'blog' = wp_blogs.
  * Posts are always stored as '' (never the literal 'post'), so anything that is not
- * explicitly 'user' or 'blog' normalizes to ''. See plan.md.
+ * explicitly 'user' or 'blog' normalizes to ''.
  *
  * @param string $object_type Raw object type (e.g. '', 'post', 'page', a CPT, 'user', 'blog').
  * @return string Normalized object type: '' , 'user', or 'blog'.
@@ -2431,7 +2446,7 @@ function multisite_relationship_blog_id( $object_type, $blog_id = 0 ) {
  * @param int              $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
  * @param bool             $append    Optional. If false will delete difference of multisite terms. Default false.
  * @param string           $object_type Optional. ID namespace of `$object_id`: '' (post, default), 'user', or 'blog'.
- *                                      May be omitted for single-namespace taxonomies; it is then inferred. See plan.md.
+ *                                      May be omitted for single-namespace taxonomies; it is then inferred.
  * @return array|WP_Error Multisite term multisite taxonomy IDs of the affected multisite terms.
  */
 function set_object_multisite_terms( $object_id, $multisite_terms, $multisite_taxonomy, $blog_id = 0, $append = false, $object_type = '' ) {
@@ -3995,7 +4010,7 @@ function check_multisite_term_hierarchy_for_loops( $parent_term, $multisite_term
  * @param string $multisite_taxonomy Optional. The taxonomy for which to retrieve terms. Default 'post_tag'.
  * @param int    $blog_id The blog ID to retrieve from. Defaults to the current blog ID if not specified.
  * @param string $object_type Optional. ID namespace to restrict to: '' (post, default), 'user', or 'blog'.
- *                            For a single-namespace taxonomy it is inferred when omitted. See plan.md.
+ *                            For a single-namespace taxonomy it is inferred when omitted.
  *
  * @return string|bool|WP_Error
  */
