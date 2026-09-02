@@ -64,8 +64,40 @@ fi
 # Use explicit flags to prevent mysqladmin from misinterpreting the IP
 EXTRA_FLAGS="--host=$HOST --port=$PORT --protocol=tcp"
 
+# 4. Refuse to touch a database this script did not create itself.
+#
+# `mysqladmin drop` below is unconditional: given the wrong name (a real
+# project's DB_NAME, say, copied in by habit or by an agent that did not know
+# better) it silently destroys that database. A marker table left by a prior
+# run is the only thing that makes a same-named database "ours" to reset;
+# anything else -- including a database that merely happens to exist under
+# this name -- is refused rather than assumed disposable.
+MARKER_TABLE="_install_wp_tests_marker"
+
+db_is_ours_or_absent() {
+    local table_count marker_count
+
+    # A nonexistent schema and an existing-but-empty one (e.g. just CREATE
+    # DATABASE'd by hand, per the grant fallback below) both read back 0 tables
+    # here -- no separate existence check needed, and both are safe to adopt.
+    table_count=$(mysql -u"$DB_USER" -p"$DB_PASS" $EXTRA_FLAGS -N -e \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME';" 2>/dev/null) || return 1
+    [[ "$table_count" == "0" ]] && return 0
+
+    marker_count=$(mysql -u"$DB_USER" -p"$DB_PASS" $EXTRA_FLAGS -N -e \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = '$MARKER_TABLE';" 2>/dev/null) || return 1
+    [[ "$marker_count" == "1" ]]
+}
+
+if ! db_is_ours_or_absent; then
+    echo "Refusing to touch database '$DB_NAME' at $HOST:$PORT: it already exists and carries no $MARKER_TABLE marker, so this script did not create it." >&2
+    echo "Pass a dedicated, disposable test-database name -- never a project's real DB_NAME." >&2
+    exit 1
+fi
+
 echo "Refreshing Database at $HOST:$PORT..."
 mysqladmin drop "$DB_NAME" -f -u"$DB_USER" -p"$DB_PASS" $EXTRA_FLAGS 2>/dev/null || true
 mysqladmin create "$DB_NAME" -u"$DB_USER" -p"$DB_PASS" $EXTRA_FLAGS
+mysql -u"$DB_USER" -p"$DB_PASS" $EXTRA_FLAGS "$DB_NAME" -e "CREATE TABLE $MARKER_TABLE (created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
 
 echo "Installation complete."

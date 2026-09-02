@@ -405,6 +405,67 @@ class Multisite_Taxonomy {
 	}
 
 	/**
+	 * The ID namespaces this taxonomy is registered for.
+	 *
+	 * `$object_type` mixes two vocabularies: post types ('post', a CPT) and ID namespaces
+	 * ('user', 'blog'). Relationships only ever store the namespace, where every post type is ''.
+	 * This is the relationship question; {@see Multisite_Taxonomy::post_types()} is the other one.
+	 *
+	 * @access public
+	 *
+	 * @return string[] Unique normalized namespaces, e.g. array( '', 'user' ).
+	 */
+	public function namespaces() {
+		$namespaces = array_map( 'normalize_multisite_object_type', (array) $this->object_type );
+
+		return array_values( array_unique( $namespaces ) );
+	}
+
+	/**
+	 * The post types this taxonomy is registered for, within the post namespace.
+	 *
+	 * @access public
+	 *
+	 * @return string[] Registered post type names. Empty when the taxonomy is user/blog only.
+	 */
+	public function post_types() {
+		return array_values(
+			array_filter(
+				(array) $this->object_type,
+				function ( $registered ) {
+					return ! in_array( $registered, array( 'user', 'blog' ), true );
+				}
+			)
+		);
+	}
+
+	/**
+	 * Whether this taxonomy accepts relationships in a namespace.
+	 *
+	 * @access public
+	 *
+	 * @param string $object_type Raw object type: '', a post type, 'user' or 'blog'.
+	 * @return bool
+	 */
+	public function supports_namespace( $object_type ) {
+		return in_array( normalize_multisite_object_type( $object_type ), $this->namespaces(), true );
+	}
+
+	/**
+	 * Whether this taxonomy spans more than one namespace.
+	 *
+	 * A mixed taxonomy cannot have a namespace inferred for it, so every relationship call has to
+	 * name one. {@see Multisite_Object} is how that is made unavoidable.
+	 *
+	 * @access public
+	 *
+	 * @return bool
+	 */
+	public function is_mixed() {
+		return count( $this->namespaces() ) > 1;
+	}
+
+	/**
 	 * Registers the ajax callback for the meta box.
 	 *
 	 * @access public

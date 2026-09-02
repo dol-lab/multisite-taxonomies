@@ -421,9 +421,8 @@ class Multisite_Taxonomy_Archive {
 		// A single tax_query clause aliases the relationship table to its full name. Scope the
 		// match to the requested namespace: posts ('') live on this blog, user/blog rows are
 		// network-global (blog_id 0).
-		$rel               = $wpdb->multisite_term_relationships;
-		$blog_id           = multisite_relationship_blog_id( $this->object_type, get_current_blog_id() );
-		$clauses['where'] .= $wpdb->prepare( " AND $rel.object_type = %s AND $rel.blog_id = %d", $this->object_type, $blog_id ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $rel is a registered table name.
+		$scope             = Multisite_Object_Scope::create( $this->object_type, get_current_blog_id() );
+		$clauses['where'] .= ' AND ' . $scope->where( $wpdb->multisite_term_relationships );
 
 		return $clauses;
 	}

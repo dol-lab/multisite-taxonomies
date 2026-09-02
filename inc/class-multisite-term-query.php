@@ -89,6 +89,17 @@ class Multisite_Term_Query {
 	 *                                                should be limited. `multisite_taxonomy` is accepted as an alias.
 	 *     @type int|array    $object_ids             Optional. Object ID, or array of object IDs. Results will be
 	 *                                                limited to terms associated with these objects.
+	 *     @type Multisite_Object_Scope $object_scope Optional. The namespace and blog the relationships belong
+	 *                                                to, as one value. Overrides `object_type` and `blog_id`.
+	 *                                                Default null (built from those two).
+	 *     @type string       $object_type            Optional. ID namespace the relationships belong to: '' (post),
+	 *                                                'user' or 'blog'. Default null (unstated, read as the post
+	 *                                                namespace once relationships are queried).
+	 *     @type int|null     $blog_id                Optional. Blog the object IDs belong to. Post IDs are unique
+	 *                                                per blog only, so a relationship read is pinned to one blog;
+	 *                                                user and blog relationships are network-global and always
+	 *                                                sit at 0. Default 0 (the current blog). Pass null to read
+	 *                                                across every blog, IDs colliding included.
 	 *     @type string       $orderby                Field(s) to order multisite terms by. Accepts multisite term fields ('name',
 	 *                                                'slug', 'multisite_term_group', 'multisite_term_id', 'id', 'description'),
 	 *                                                'count' for multisite term multisite taxonomy count, 'include' to match the
@@ -168,7 +179,9 @@ class Multisite_Term_Query {
 		$this->query_var_defaults = array(
 			'taxonomy'                             => null,
 			'object_ids'                           => null,
+			'object_scope'                         => null,
 			'object_type'                          => null,
+			'blog_id'                              => 0,
 			'orderby'                              => 'name',
 			'order'                                => 'ASC',
 			'hide_empty'                           => true,
@@ -370,6 +383,10 @@ class Multisite_Term_Query {
 		 */
 		$args = apply_filters( 'get_multisite_terms_args', $args, $multisite_taxonomies );
 
+		// A relationship read joins `tr`: naming objects, naming a scope, or both.
+		$scope               = $this->parse_object_scope( $args );
+		$joins_relationships = ! empty( $args['object_ids'] ) || ( $scope && $scope->is_narrowing() );
+
 		// Avoid the query if the queried parent/child_of multisite term has no descendants.
 		$child_of = $args['child_of'];
 		$parent   = $args['parent'];
@@ -397,7 +414,7 @@ class Multisite_Term_Query {
 
 		// 'multisite_term_order' is a legal sort order only when joining the relationship table.
 		$_orderby = $this->query_vars['orderby'];
-		if ( 'multisite_term_order' === $_orderby && empty( $this->query_vars['object_ids'] ) ) {
+		if ( 'multisite_term_order' === $_orderby && ! $joins_relationships ) {
 			$_orderby = 'multisite_term_id';
 		}
 		$orderby = $this->parse_orderby( $_orderby );
@@ -527,19 +544,20 @@ class Multisite_Term_Query {
 			$this->sql_clauses['where']['object_ids'] = "tr.object_id IN ($object_ids)";
 		}
 
-		// Restrict to a single ID namespace ('' = post, 'user', 'blog') when requested.
-		// `null` means "any namespace"; '' is a real value (the post namespace), so the
-		// gate is an explicit null check rather than empty().
-		if ( null !== $args['object_type'] && ! empty( $args['object_ids'] ) ) {
-			$object_type                               = normalize_multisite_object_type( $args['object_type'] );
-			$this->sql_clauses['where']['object_type'] = $wpdb->prepare( 'tr.object_type = %s', $object_type );
+		// Restrict the relationships to their namespace and blog. The scope owns both predicates,
+		// so neither can be applied without the other.
+		if ( $joins_relationships && $scope ) {
+			$scope_where = $scope->where( 'tr' );
+			if ( '' !== $scope_where ) {
+				$this->sql_clauses['where']['object_scope'] = $scope_where;
+			}
 		}
 
 		/*
 		 * When querying for object relationships, the 'count > 0' check
 		 * added by 'hide_empty' is superfluous.
 		 */
-		if ( ! empty( $args['object_ids'] ) ) {
+		if ( $joins_relationships ) {
 			$args['hide_empty'] = false;
 		}
 
@@ -596,7 +614,7 @@ class Multisite_Term_Query {
 			case 'mtmt_ids':
 			case 'slugs':
 				$selects = array( 't.*', 'tt.*' );
-				if ( 'all_with_object_id' === $args['fields'] && ! empty( $args['object_ids'] ) ) {
+				if ( 'all_with_object_id' === $args['fields'] && $joins_relationships ) {
 					$selects[] = 'tr.object_id';
 				}
 				break;
@@ -640,7 +658,7 @@ class Multisite_Term_Query {
 
 		$join .= " INNER JOIN $wpdb->multisite_term_multisite_taxonomy AS tt ON t.multisite_term_id = tt.multisite_term_id";
 
-		if ( ! empty( $this->query_vars['object_ids'] ) ) {
+		if ( $joins_relationships ) {
 			$join .= " INNER JOIN {$wpdb->multisite_term_relationships} AS tr ON tr.multisite_term_multisite_taxonomy_id = tt.multisite_term_multisite_taxonomy_id";
 		}
 
@@ -752,7 +770,7 @@ class Multisite_Term_Query {
 		 * `$fields` is 'all_with_object_id', but should otherwise be
 		 * removed.
 		 */
-		if ( ! empty( $args['object_ids'] ) && 'all_with_object_id' !== $_fields ) {
+		if ( $joins_relationships && 'all_with_object_id' !== $_fields ) {
 			$_multisite_mtmt_ids = array();
 			$_multisite_terms    = array();
 			foreach ( $multisite_terms as $multisite_term ) {
@@ -819,6 +837,41 @@ class Multisite_Term_Query {
 
 		$this->multisite_terms = $multisite_terms;
 		return $this->multisite_terms;
+	}
+
+	/**
+	 * Resolve the scope a relationship read applies to.
+	 *
+	 * An explicit `object_scope` wins; otherwise the `object_type` and `blog_id` vars build one.
+	 * A relationship read that names neither is pinned to the current blog's post namespace: an
+	 * unpinned read spans every site on the network, and that must be asked for, not be what a
+	 * caller gets by saying nothing. `blog_id => null` is that opt-out.
+	 *
+	 * @access protected
+	 *
+	 * @param array $args Parsed query vars.
+	 * @return Multisite_Object_Scope|null Scope, or null when the query does not read relationships.
+	 */
+	protected function parse_object_scope( $args ) {
+		if ( isset( $args['object_scope'] ) && $args['object_scope'] instanceof Multisite_Object_Scope ) {
+			return $args['object_scope'];
+		}
+
+		$has_objects = ! empty( $args['object_ids'] );
+
+		if ( null === $args['blog_id'] ) {
+			if ( ! $has_objects && null === $args['object_type'] ) {
+				return null;
+			}
+			return Multisite_Object_Scope::across_blogs( $args['object_type'] );
+		}
+
+		// A blog on its own is a relationship read too: the terms in use on that site.
+		if ( ! $has_objects && (int) $args['blog_id'] <= 0 ) {
+			return null;
+		}
+
+		return Multisite_Object_Scope::create( $args['object_type'], (int) $args['blog_id'] );
 	}
 
 	/**

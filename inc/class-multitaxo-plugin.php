@@ -87,6 +87,10 @@ class Multitaxo_Plugin {
 		// before_delete_post per post, so purge that blog's relationship rows here.
 		add_action( 'wp_delete_site', array( $this, 'delete_site_action_hook' ) );
 
+		// User relationships are network-global, so nothing else ever removes them. The handler
+		// still has to check the user really left the network: see deleted_user_action_hook().
+		add_action( 'deleted_user', array( $this, 'deleted_user_action_hook' ) );
+
 		// Filter the native network Users / Sites lists to a single multisite term when linked from
 		// the term list table's count column.
 		add_action( 'pre_get_users', array( $this, 'filter_network_users_by_multisite_term' ) );
@@ -2135,48 +2139,123 @@ class Multitaxo_Plugin {
 	}
 
 	/**
-	 * Purge a deleted site's rows from the network-global relationships table.
+	 * Purge a deleted site's rows from the relationships table.
 	 *
-	 * Post relationships are keyed by `blog_id`, but deleting a whole site drops its
-	 * `wp_<id>_posts` table directly without firing `before_delete_post` per post, so
-	 * those rows would otherwise be orphaned and the affected term counts left inflated.
-	 * User- and blog-namespace rows are network-global (blog_id 0) and unaffected.
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
+	 * Two different things go, and they are stored differently. The site's posts hold post
+	 * relationships keyed by `blog_id`, and deleting a site drops its `wp_<id>_posts` table
+	 * directly without firing `before_delete_post` per post. The site itself may also be a
+	 * tagged object, and that row is network-global (blog_id 0, object_type 'blog').
+	 * User rows belong to no site and survive, until the user is deleted.
 	 *
 	 * @param WP_Site $old_site The site being deleted.
 	 * @return void
 	 */
 	public function delete_site_action_hook( $old_site ) {
-		global $wpdb;
-
 		$blog_id = is_a( $old_site, 'WP_Site' ) ? (int) $old_site->blog_id : 0;
 
 		if ( $blog_id <= 0 ) {
 			return;
 		}
 
-		// Capture the affected term/taxonomy rows before the delete so counts can be
-		// recalculated afterwards, grouped by taxonomy to honour any update_count_callback.
-		$affected = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT DISTINCT tt.multisite_term_multisite_taxonomy_id AS mtmt_id, tt.multisite_taxonomy AS taxonomy
-				FROM {$wpdb->multisite_term_relationships} AS tr
-				INNER JOIN {$wpdb->multisite_term_multisite_taxonomy} AS tt
-					ON tt.multisite_term_multisite_taxonomy_id = tr.multisite_term_multisite_taxonomy_id
-				WHERE tr.blog_id = %d",
-				$blog_id
-			)
-		); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// The site's post relationships, keyed by the blog they live on.
+		$this->purge_relationships( array( 'blog_id' => $blog_id ), sprintf( 'deleted blog %d', $blog_id ) );
 
-		$deleted = $wpdb->delete( $wpdb->multisite_term_relationships, array( 'blog_id' => $blog_id ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// The row saying "this site carries term X" is a different thing: it is network-global
+		// (blog_id 0, object_type 'blog') and names the site as an object, so the purge above
+		// never sees it.
+		$this->purge_relationships(
+			array(
+				'blog_id'     => 0,
+				'object_type' => 'blog',
+				'object_id'   => $blog_id,
+			),
+			sprintf( 'deleted site object %d', $blog_id )
+		);
+	}
 
-		if ( false === $deleted ) {
-			self::log( 'error', sprintf( 'failed to delete term relationships for deleted blog %d: %s', $blog_id, $wpdb->last_error ), __METHOD__ );
+	/**
+	 * Purge a deleted user's rows from the relationships table.
+	 *
+	 * User relationships are network-global (blog_id 0), so no site deletion and no post deletion
+	 * ever reaches them: without this they outlive the user and keep inflating term counts.
+	 *
+	 * `deleted_user` does not mean the user is gone, though. On multisite `wp_delete_user()`
+	 * only calls `remove_user_from_blog()` and fires the action anyway, so the user lives on
+	 * everywhere else; only `wpmu_delete_user()` drops the row from the network. Purging on the
+	 * per-site event would strip the user's terms network-wide, so ask the users table (directly,
+	 * the row has just changed) whether anything is left to keep.
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param int $user_id The deleted user ID.
+	 * @return void
+	 */
+	public function deleted_user_action_hook( $user_id ) {
+		global $wpdb;
+
+		$user_id = absint( $user_id );
+
+		if ( $user_id <= 0 ) {
 			return;
 		}
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$on_network = $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM $wpdb->users WHERE ID = %d", $user_id ) );
+
+		if ( $on_network ) {
+			return;
+		}
+
+		$this->purge_relationships(
+			array(
+				'blog_id'     => 0,
+				'object_type' => 'user',
+				'object_id'   => $user_id,
+			),
+			sprintf( 'deleted user %d', $user_id )
+		);
+	}
+
+	/**
+	 * Delete relationship rows and recount the terms they belonged to.
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param array  $where   Column => value conditions identifying the rows to remove.
+	 * @param string $context Short description of what was deleted, for the error log.
+	 * @return void
+	 */
+	private function purge_relationships( array $where, $context ) {
+		global $wpdb;
+
+		$conditions = array();
+		foreach ( $where as $column => $value ) {
+			$conditions[] = is_int( $value )
+				? $wpdb->prepare( "tr.`$column` = %d", $value ) // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- column names are literals from the caller.
+				: $wpdb->prepare( "tr.`$column` = %s", $value ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- see above.
+		}
+		$conditions = implode( ' AND ', $conditions );
+
+		// Capture the affected term/taxonomy rows before the delete so counts can be
+		// recalculated afterwards, grouped by taxonomy to honour any update_count_callback.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$affected = $wpdb->get_results(
+			"SELECT DISTINCT tt.multisite_term_multisite_taxonomy_id AS mtmt_id, tt.multisite_taxonomy AS taxonomy
+			FROM {$wpdb->multisite_term_relationships} AS tr
+			INNER JOIN {$wpdb->multisite_term_multisite_taxonomy} AS tt
+				ON tt.multisite_term_multisite_taxonomy_id = tr.multisite_term_multisite_taxonomy_id
+			WHERE $conditions"
+		);
+		// phpcs:enable
+
 		if ( empty( $affected ) ) {
+			return;
+		}
+
+		$deleted = $wpdb->delete( $wpdb->multisite_term_relationships, $where ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		if ( false === $deleted ) {
+			self::log( 'error', sprintf( 'failed to delete term relationships for %s: %s', $context, $wpdb->last_error ), __METHOD__ );
 			return;
 		}
 
