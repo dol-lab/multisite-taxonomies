@@ -436,7 +436,9 @@ would strip a user's terms network-wide the first time an admin removed them fro
 The object-to-terms cache group is derived from the scope
 (`<blog>_<namespace>_<taxonomy>_multisite_relationships`), because a cached list of term IDs keyed
 by object ID means nothing without one. Anything writing that cache by hand has to use
-`Multisite_Object_Scope::cache_group()`, or its entries will not be found or invalidated.
+`Multisite_Object_Scope::cache_group()`, or its entries will not be found or invalidated. The read
+that fills a group must run in the same scope the group names: priming the user group from a
+relationship read that never named the user namespace is how post terms end up cached as a user's.
 
 ## Logging
 

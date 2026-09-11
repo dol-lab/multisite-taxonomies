@@ -52,6 +52,11 @@ require_once MULTITAXO_PLUGIN_DIR . 'inc/class-walker-hierarchical-multisite-tax
 require_once MULTITAXO_PLUGIN_DIR . 'inc/class-walker-hierarchical-multisite-taxonomy-dropdown.php';
 // Loading multisite taxonomy and multisite term API.
 require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-taxonomy.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-meta.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-hierarchy.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-crud.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-relationships.php';
+require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-cache.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-taxonomy-template.php';
 require_once MULTITAXO_PLUGIN_DIR . 'inc/multisite-term-objects.php';
 
