@@ -123,51 +123,79 @@ ul.hierarchical-term-tabs li {
     background-color: #fdfdfd;
 }
 
-.multisite-hierarchical-taxonomy-div ul.hierarchical-term-checklist ul {
-    margin-left: 18px;
+ul.hierarchical-term-checklist {
+    /* The gutter each row keeps free on its left for a collapse arrow. It is also the indent of a
+       nested list, so a level's arrows line up under the checkboxes of the level above. Touch
+       screens get a wider one, as the admin grows its checkboxes there. */
+    --mtax-gutter: 20px;
+    /* The height of a row's first line, which is what a collapse arrow is centred against. */
+    --mtax-row-height: 22px;
 }
 
 ul.hierarchical-term-checklist li {
     margin: 0;
     padding: 0;
-    line-height: 22px;
+    line-height: var(--mtax-row-height);
     word-wrap: break-word;
 }
 
-/* Collapsible nested terms. */
-ul.hierarchical-term-checklist ul.children.mtax-collapsed {
+/* The flat "Most used" list has no branches, so it is the one list that keeps its rows flush. */
+.hierarchical-term-checklist li:not(.popular-multisite-taxonomy) {
+    position: relative;
+    padding-left: var(--mtax-gutter);
+}
+
+/* Collapsible nested terms. A term with children carries a native <details> disclosure holding
+   nothing but the sub-term list; its summary is the arrow alone, taken out of the flow into the
+   row's gutter, so a row is laid out the same whether or not the term has children. */
+.hierarchical-term-checklist .mtax-branch-summary {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--mtax-gutter);
+    height: var(--mtax-row-height);
+    list-style: none;
+    cursor: pointer;
+}
+
+/* Safari still draws its own triangle unless this pseudo-element is hidden. */
+.hierarchical-term-checklist .mtax-branch-summary::-webkit-details-marker {
     display: none;
 }
 
-.hierarchical-term-checklist .mtax-term-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    margin: 0;
-    border: 0;
-    background: none;
-    color: #787c82;
-    cursor: pointer;
-    vertical-align: top;
-}
-
-.hierarchical-term-checklist .mtax-toggle-indicator:before {
+.hierarchical-term-checklist .mtax-branch-summary:before {
     content: "\f345"; /* dashicons-arrow-right-alt2 */
     font: normal 20px/1 dashicons;
+    color: #787c82;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
-.hierarchical-term-checklist li.mtax-expanded > .mtax-term-toggle .mtax-toggle-indicator:before {
+.hierarchical-term-checklist .mtax-branch[open] > .mtax-branch-summary:before {
     content: "\f347"; /* dashicons-arrow-down-alt2 */
 }
 
-/* Keep leaf-term labels aligned with the labels of sibling parent terms. */
-.hierarchical-term-checklist li:not(.has-children) > label {
-    margin-left: 20px;
+.hierarchical-term-checklist .mtax-branch-summary:focus-visible {
+    outline: 1px solid #2271b1;
+}
+
+/* The admin gives touch screens bigger checkboxes and roomier rows; without the extra spacing
+   the rows of a tree collide. Mirrors what core does for the category metabox. */
+@media screen and (max-width: 782px) {
+    ul.hierarchical-term-checklist {
+        --mtax-gutter: 28px;
+    }
+
+    ul.hierarchical-term-checklist li {
+        margin-bottom: 15px;
+    }
+
+    ul.hierarchical-term-checklist ul.children {
+        margin-top: 15px;
+    }
 }
 
 #poststuff .inside .the-multisite-terms-cloud {
