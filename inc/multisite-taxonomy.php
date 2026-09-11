@@ -2423,6 +2423,20 @@ function multisite_taxonomy_supports_object_type( $object_type, $multisite_taxon
 }
 
 /**
+ * Normalize a blog ID, falling back to the current blog.
+ *
+ * Accepts the numeric strings that arrive from request data and treats anything
+ * non-numeric or non-positive as "not supplied".
+ *
+ * @param mixed $blog_id Requested blog ID.
+ * @return int Blog ID to use.
+ */
+function multisite_blog_id_or_current( $blog_id = 0 ) {
+	$blog_id = is_numeric( $blog_id ) ? (int) $blog_id : 0;
+	return $blog_id > 0 ? $blog_id : get_current_blog_id();
+}
+
+/**
  * Resolve the blog_id to store for a relationship row.
  *
  * User and blog relationships are network-global: their `object_id` is a user/blog ID and
@@ -2437,10 +2451,7 @@ function multisite_relationship_blog_id( $object_type, $blog_id = 0 ) {
 	if ( 'user' === $object_type || 'blog' === $object_type ) {
 		return 0;
 	}
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
-	}
-	return $blog_id;
+	return multisite_blog_id_or_current( $blog_id );
 }
 
 /**
@@ -3757,10 +3768,7 @@ function the_multisite_taxonomies( $args = array() ) {
 function get_the_multisite_taxonomies( $post = 0, $blog_id = 0, $args = array() ) {
 	$post = get_post( $post );
 
-	// Check that our blog ID is set, otherwise just get the current.
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
-	}
+	$blog_id = multisite_blog_id_or_current( $blog_id );
 
 	$args = wp_parse_args(
 		$args,
@@ -4267,10 +4275,7 @@ function set_post_multisite_terms( $post_id = 0, $tags = '', $taxonomy = 'post_t
 		return false;
 	}
 
-	// Check that our blog ID is set, otherwise just get the current.
-	if ( ! is_int( $blog_id ) || $blog_id <= 0 ) {
-		$blog_id = get_current_blog_id();
-	}
+	$blog_id = multisite_blog_id_or_current( $blog_id );
 
 	if ( empty( $tags ) ) {
 		$tags = array();
