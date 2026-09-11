@@ -1622,6 +1622,9 @@ class Multitaxo_Plugin {
 		if ( current_user_can( $tax->cap->edit_multisite_terms ) ) {
 			wp_enqueue_script( 'inline-edit-multisite-tax' );
 		}
+
+		// Shared with the meta box; this screen wants it for the badges in the name column.
+		wp_enqueue_style( 'multisite-taxonomy-admin', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), self::asset_version( 'assets/css/admin.css' ) );
 		?>
 
 		<div class="wrap nosubsub">

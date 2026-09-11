@@ -6,6 +6,81 @@
  */
 
 /**
+ * Extra markup to display directly after a multisite term's name.
+ *
+ * Everything this plugin renders knows a term's name and nothing else about it. Where a term came
+ * from, or what another plugin flagged it as, is that plugin's knowledge — so this is the seam for
+ * it: a plugin returns a small piece of markup (an icon, a badge) and it is appended after the
+ * name everywhere a term is displayed.
+ *
+ * The result is passed through wp_kses() with a deliberately small allowlist, so a caller can echo
+ * it as it is.
+ *
+ * @param object $term    The term being displayed.
+ * @param string $context Where it is displayed: 'checklist', 'checklist-popular' or 'read-only'.
+ * @param array  $args {
+ *     Optional. What the term is being displayed for.
+ *
+ *     @type string $taxonomy    Taxonomy name. Defaults to the term's own taxonomy.
+ *     @type string $object_type Object namespace ('' = post, 'user', 'blog'). Default ''.
+ *     @type int    $object_id   Object whose terms are listed, 0 when there is none. Default 0.
+ * }
+ * @return string Sanitized HTML wrapped in a `.multitax-term-badges` span, '' when nothing was added.
+ */
+function multisite_term_display_suffix( $term, $context, $args = array() ) {
+	$args = wp_parse_args(
+		$args,
+		array(
+			'taxonomy'    => isset( $term->multisite_taxonomy ) ? $term->multisite_taxonomy : '',
+			'object_type' => '',
+			'object_id'   => 0,
+		)
+	);
+
+	/**
+	 * Filters the markup appended after a multisite term's name.
+	 *
+	 * Keep it short — it renders inline, inside checkbox labels among others. Dashicons are
+	 * available on every admin screen the pickers appear on.
+	 *
+	 * @param string $suffix  Markup to append. Default ''.
+	 * @param object $term    The term being displayed.
+	 * @param string $context Where it is displayed: 'checklist', 'checklist-popular' or 'read-only'.
+	 * @param array  $args    Taxonomy, object namespace and object id the term is displayed for.
+	 */
+	$suffix = apply_filters( 'multisite_term_display_suffix', '', $term, $context, $args );
+
+	if ( ! is_string( $suffix ) || '' === trim( $suffix ) ) {
+		return '';
+	}
+
+	$attributes = array(
+		'class'       => true,
+		'title'       => true,
+		'role'        => true,
+		'aria-label'  => true,
+		'aria-hidden' => true,
+	);
+
+	$suffix = wp_kses(
+		$suffix,
+		array(
+			'span'   => $attributes,
+			'abbr'   => $attributes,
+			'small'  => $attributes,
+			'strong' => $attributes,
+			'em'     => $attributes,
+		)
+	);
+
+	if ( '' === trim( $suffix ) ) {
+		return '';
+	}
+
+	return ' <span class="multitax-term-badges">' . $suffix . '</span>';
+}
+
+/**
  * Output an unordered list of checkbox input elements labelled with multisite term names.
  *
  * @param int          $post_id Optional. Post ID. Default 0.
@@ -88,6 +163,11 @@ function multisite_terms_checklist( $post_id = 0, $args = array() ) {
 			)
 		);
 	}
+	// The walker hands these to multisite_term_display_suffix(): a badge needs to know which
+	// object's list it is being rendered for, not just the term.
+	$args['object_type'] = $r['object_type'];
+	$args['object_id']   = (int) $post_id;
+
 	if ( $descendants_and_self ) {
 		$descendants_args = array(
 			'taxonomy'     => $multisite_taxonomy,
@@ -318,15 +398,24 @@ function dropdown_multisite_taxonomy( $args = '' ) {
  * @param int    $number Number of multisite terms to retrieve. Defaults to 10.
  * @param bool   $display Optionally output the list as well. Defaults to true.
  * @param string $object_type Object namespace ('' = post, 'user', 'blog') the checklist assigns to.
+ * @param int    $object_id Object whose terms are pre-checked. Defaults to the current post, which
+ *                          is the only object a post screen has to offer.
  * @return array List of popular multisite term IDs.
  */
-function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value = 0, $number = 10, $display = true, $object_type = '' ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $default_value kept for signature parity with WordPress core wp_popular_terms_checklist().
-	$post = get_post();
-
+function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value = 0, $number = 10, $display = true, $object_type = '', $object_id = 0 ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- $default_value kept for signature parity with WordPress core wp_popular_terms_checklist().
 	$blog_id = get_current_blog_id();
 
-	if ( $post && $post->ID ) {
-		$checked_terms = get_object_multisite_terms( $post->ID, $multisite_taxonomy, $blog_id, array( 'fields' => 'ids' ) );
+	// A user or a site is never the global post, so falling back to it is only right in the post
+	// namespace — everywhere else an id the caller passes is the only one that means anything.
+	$object_id = (int) $object_id;
+	if ( ! $object_id && in_array( $object_type, array( '', 'post' ), true ) ) {
+		$post      = get_post();
+		$object_id = $post ? (int) $post->ID : 0;
+	}
+
+	if ( $object_id ) {
+		$checked_terms = get_object_multisite_terms( $object_id, $multisite_taxonomy, $blog_id, array( 'fields' => 'ids' ), $object_type );
+		$checked_terms = is_wp_error( $checked_terms ) ? array() : array_map( 'intval', $checked_terms );
 	} else {
 		$checked_terms = array();
 	}
@@ -346,22 +435,37 @@ function popular_multisite_terms_checklist( $multisite_taxonomy, $default_value 
 
 	$popular_ids = array();
 	foreach ( (array) $terms as $term ) {
-		$popular_ids[] = $term->multisite_term_id;
+		$term_id       = (int) $term->multisite_term_id;
+		$popular_ids[] = $term_id;
 		if ( ! $display ) { // Hack for Ajax use.
 			continue;
 		}
-		$id      = "popular-$multisite_taxonomy-$term->id";
-		$checked = in_array( $term->id, $checked_terms, true ) ? 'checked="checked"' : '';
+		// `popular-category` is what multisite-hierarchical-term-box.js matches to mirror a click
+		// here onto the same term in the full list, and it is the class the full list marks its own
+		// popular terms with; the item carries both.
+		$id = "popular-$multisite_taxonomy-$term_id";
 		?>
 
-		<li id="<?php echo esc_attr( $id ); ?>" class="popular-multisite-taxonomy">
+		<li id="<?php echo esc_attr( $id ); ?>" class="popular-multisite-taxonomy popular-category">
 			<label class="selectit">
-				<input id="in-<?php echo esc_attr( $id ); ?>" type="checkbox" <?php echo $checked; // phpcs:ignore WordPress.Security.EscapeOutput ?> value="<?php echo (int) $term->id; ?>" <?php disabled( ! current_user_can_assign_multisite_terms( $tax, $object_type ) ); ?> />
+				<input id="in-<?php echo esc_attr( $id ); ?>" type="checkbox" <?php checked( in_array( $term_id, $checked_terms, true ) ); ?> value="<?php echo esc_attr( $term_id ); ?>" <?php disabled( ! current_user_can_assign_multisite_terms( $tax, $object_type ) ); ?> />
 				<?php
 				/** This filter is documented in wp-includes/category-template.php */
 				echo esc_html( apply_filters( 'the_multisite_taxonomy', $term->name ) );
 				?>
 			</label>
+			<?php
+			// Sanitized by multisite_term_display_suffix().
+			echo multisite_term_display_suffix( // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+				$term,
+				'checklist-popular',
+				array(
+					'taxonomy'    => $multisite_taxonomy,
+					'object_type' => $object_type,
+					'object_id'   => $object_id,
+				)
+			);
+			?>
 		</li>
 
 		<?php

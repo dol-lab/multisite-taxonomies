@@ -234,3 +234,23 @@ ul.hierarchical-term-checklist ul.children.mtax-collapsed {
 .multitaxonomy-readonly-list li {
     margin: 0 0 2px;
 }
+
+/* Markup other plugins append after a term name, see multisite_term_display_suffix(). */
+.multitax-term-badges {
+    color: #646970;
+    font-weight: normal;
+    white-space: nowrap;
+}
+
+/* Dashicons default to `vertical-align: top`, which hangs them off the top of the line box.
+   `text-bottom` sits the icon on the text's own bottom edge, next to the name rather than above
+   it — the badge follows a checkbox label, a list item and a bold link, all with line heights of
+   their own, so it has to align to the text and not to the line. */
+.multitax-term-badges .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    line-height: 1;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+}

@@ -437,11 +437,14 @@ class Multisite_Terms_List_Table extends WP_List_Table {
 		);
 
 		$out = sprintf(
-			'<strong><a class="row-title" href="%s" aria-label="%s">%s</a></strong><br />',
+			'<strong><a class="row-title" href="%s" aria-label="%s">%s</a></strong>%s<br />',
 			esc_url( $edit_link ),
 			/* translators: %s: multisite term name */
 			esc_attr( sprintf( __( '&#8220;%s&#8221; (Edit)', 'multitaxo' ), $multisite_term->name ) ),
-			$name
+			$name,
+			// Sanitized by multisite_term_display_suffix(). No object here: this lists terms as
+			// terms, so only what is true of the term itself can be shown.
+			multisite_term_display_suffix( $multisite_term, 'list-table', array( 'taxonomy' => $multisite_taxonomy ) )
 		);
 
 		$out .= '<div class="hidden" id="inline_' . esc_attr( $qe_data->multisite_term_id ) . '">';

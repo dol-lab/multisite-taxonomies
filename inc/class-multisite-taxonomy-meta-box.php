@@ -237,7 +237,7 @@ class Multisite_Taxonomy_Meta_Box {
 
 		wp_enqueue_script( 'hierarchical-multisite-taxonomy-box', MULTITAXO_ASSETS_URL . '/js/multisite-hierarchical-term-box.js', array( 'jquery-ui-tabs', 'wp-lists' ), Multitaxo_Plugin::asset_version( 'assets/js/multisite-hierarchical-term-box.js' ), 1 );
 
-		wp_enqueue_style( 'multisite-taxonomy-meta-box', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), Multitaxo_Plugin::asset_version( 'assets/css/admin.css' ) );
+		wp_enqueue_style( 'multisite-taxonomy-admin', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), Multitaxo_Plugin::asset_version( 'assets/css/admin.css' ) );
 	}
 
 	/**
@@ -452,7 +452,7 @@ class Multisite_Taxonomy_Meta_Box {
 
 			<div id="<?php echo esc_attr( $tax_name ); ?>-pop" class="tabs-panel" style="display: none;">
 				<ul id="<?php echo esc_attr( $tax_name ); ?>checklist-pop" class="hierarchical-term-checklist form-no-clear" >
-					<?php $popular_ids = popular_multisite_terms_checklist( $tax_name, 0, 10, true, $r['object_type'] ); ?>
+					<?php $popular_ids = popular_multisite_terms_checklist( $tax_name, 0, 10, true, $r['object_type'], $obj_id ); ?>
 				</ul>
 			</div>
 
@@ -548,7 +548,8 @@ class Multisite_Taxonomy_Meta_Box {
 	 * @return void
 	 */
 	private function read_only_terms_box( int $obj_id, string $object_type, $taxonomy ) {
-		$terms = get_object_multisite_terms( $obj_id, $taxonomy->name, 0, array( 'fields' => 'names' ), $object_type );
+		// Whole term objects, not just names: the display filter gets to see the term it decorates.
+		$terms = get_object_multisite_terms( $obj_id, $taxonomy->name, 0, array(), $object_type );
 
 		if ( is_wp_error( $terms ) || ! is_array( $terms ) ) {
 			$terms = array();
@@ -575,8 +576,22 @@ class Multisite_Taxonomy_Meta_Box {
 				<p><?php echo esc_html( $taxonomy->labels->no_terms ); ?></p>
 			<?php else : ?>
 				<ul class="multitaxonomy-readonly-list">
-					<?php foreach ( $terms as $term_name ) : ?>
-						<li><?php echo esc_html( $term_name ); ?></li>
+					<?php foreach ( $terms as $term ) : ?>
+						<li>
+							<?php echo esc_html( $term->name ); ?>
+							<?php
+							// Sanitized by multisite_term_display_suffix().
+							echo multisite_term_display_suffix( // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+								$term,
+								'read-only',
+								array(
+									'taxonomy'    => $taxonomy->name,
+									'object_type' => $object_type,
+									'object_id'   => $obj_id,
+								)
+							);
+							?>
+						</li>
 					<?php endforeach; ?>
 				</ul>
 			<?php endif; ?>

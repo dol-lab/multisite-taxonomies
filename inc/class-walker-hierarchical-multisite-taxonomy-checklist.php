@@ -93,6 +93,17 @@ class Walker_Hierarchical_Multisite_Taxonomy_Checklist extends Walker {
 
 		$args['selected_terms'] = empty( $args['selected_terms'] ) ? array() : $args['selected_terms'];
 
+		// Sanitized markup another plugin wants shown after the name (a lock, a badge, ...).
+		$suffix = multisite_term_display_suffix(
+			$category,
+			'checklist',
+			array(
+				'taxonomy'    => $taxonomy,
+				'object_type' => isset( $args['object_type'] ) ? $args['object_type'] : '',
+				'object_id'   => isset( $args['object_id'] ) ? (int) $args['object_id'] : 0,
+			)
+		);
+
 		if ( ! empty( $args['list_only'] ) ) {
 			$aria_checked = 'false';
 			$inner_class  = 'category';
@@ -106,14 +117,14 @@ class Walker_Hierarchical_Multisite_Taxonomy_Checklist extends Walker {
 			$output .= "\n" . '<li' . $class . '>' .
 				'<div class="' . $inner_class . '" data-term-id=' . $category->multisite_term_id .
 				' tabindex="0" role="checkbox" aria-checked="' . $aria_checked . '">' .
-				esc_html( apply_filters( 'the_category', $category->name ) ) . '</div>';
+				esc_html( apply_filters( 'the_category', $category->name ) ) . '</div>' . $suffix;
 		} else {
 			/** This filter is documented in wp-includes/category-template.php */
 			$output .= "\n<li id='multisite-hierarchical-term-{$taxonomy}-{$category->multisite_term_id}'$class>" .
 				'<label class="selectit"><input value="' . $category->multisite_term_id . '" type="checkbox" name="' . $name . '[]" id="in-' . $taxonomy . '-' . $category->multisite_term_id . '"' .
 				checked( in_array( $category->multisite_term_id, $args['selected_terms'], true ), true, false ) .
 				disabled( empty( $args['disabled'] ), false, false ) . ' /> ' .
-				esc_html( apply_filters( 'the_category', $category->name ) ) . '</label>';
+				esc_html( apply_filters( 'the_category', $category->name ) ) . '</label>' . $suffix;
 		}
 	}
 

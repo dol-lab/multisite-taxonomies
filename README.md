@@ -100,6 +100,37 @@ overwrite whatever the panel just stored.
 `$pagenow` is the reliable signal on those screens: the current screen's `is_block_editor()` flag
 is unset at `init` (when taxonomies register) and on the meta-box submit.
 
+### Marking terms
+
+`multisite_term_display_suffix` appends a small piece of markup after a term's name, in the
+hierarchical checklist, its "Most Used" tab, the read-only list the box falls back to for users who
+may not assign terms, and the network admin term table.
+
+```php
+add_filter( 'multisite_term_display_suffix', function ( $suffix, $term, $context, $args ) {
+	if ( 'affiliation' !== $args['taxonomy'] || ! get_multisite_term_meta( $term->multisite_term_id, 'from_saml', true ) ) {
+		return $suffix;
+	}
+	return $suffix . sprintf(
+		'<span class="dashicons dashicons-lock" title="%s"></span>',
+		esc_attr__( 'Comes from the identity provider.', 'my-plugin' )
+	);
+}, 10, 4 );
+```
+
+`$context` says where the term is about to render: `checklist`, `checklist-popular`, `read-only` or
+`list-table`. `$args` carries the `taxonomy`, plus the `object_type` namespace and the `object_id`
+whose terms are listed, so a badge can describe the assignment and not just the term — the term
+table lists terms as terms, so there `object_type` is `''` and `object_id` is `0`.
+
+Keep the markup short; it renders inline, inside checkbox labels among others. `wp_kses()` strips
+everything outside a small allowlist — `span`, `abbr`, `small`, `strong`, `em`, each with `class`,
+`title`, `role`, `aria-label` and `aria-hidden` — so the result is safe to echo as it is. Non-empty
+output is wrapped in `<span class="multitax-term-badges">`, which dims it and sits Dashicons on the
+text's baseline; style your own badge from there.
+
+The flat (non-hierarchical) tag picker builds its list in JavaScript and shows no badges.
+
 ## Working with terms
 
 An object is a namespace, a site and an ID together: post 42, user 42 and site 42 are three
