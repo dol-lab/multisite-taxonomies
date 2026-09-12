@@ -282,3 +282,130 @@ ul.hierarchical-term-checklist li {
     vertical-align: text-bottom;
     margin-left: 1px;
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * The terms list table as a collapsible tree.
+ *
+ * Multisite_Terms_List_Table prints the tree collapsed — a row is given the hidden attribute when
+ * the row that would unfold it is above it — and collapsible-multisite-terms.js does the folding
+ * from there. Nothing here hides a row, so a row the script never reaches stays where the server
+ * put it.
+ *
+ * Depth reaches the row once, as the level-N class the folding script reads, and the map below
+ * turns it into the --mtax-level everything here indents by. Deeper than the map goes, a row is
+ * drawn at the top level — an indent that far in is past what a table column can hold anyway.
+ *
+ * That indent leaves a gutter and the disclosure button is taken out of the flow into it — the
+ * same trick the checklist above uses — so the arrows draw the left edge of the tree, a term
+ * without children still starts where its siblings do, and nothing shifts the row actions below.
+ *
+ * One indent step is one arrow wide, which is what lets background layers stand in for the guide
+ * lines a real tree view would draw. A row at depth N paints three: the verticals of the ancestors
+ * above its parent, as one repeating gradient; its parent's own vertical; and the tee joining that
+ * vertical to the row. They meet up between adjacent rows because every row of a subtree paints
+ * the same ancestors, and they end on their own — a row shallower than N simply paints fewer.
+ *
+ * The two variable parts are the tee's length and how far the parent's vertical drops, and each is
+ * a custom property so the two cases that change them compose: the last row of a group stops the
+ * vertical at the tee rather than running it past the end of the branch, and a row with no arrow
+ * to stop at runs the tee on into its empty gutter, so that it is anchored at its own depth like
+ * its siblings are.
+ * --------------------------------------------------------------------------------------------- */
+
+.wp-list-table.mtax-collapsible {
+    --mtax-arrow: 22px; /* gutter holding the disclosure arrow, and one indent step */
+    --mtax-mid: 18px; /* the arrow's middle: the cell's padding-top plus half the arrow */
+    --mtax-guide: #dcdcde;
+}
+
+.wp-list-table.mtax-collapsible tbody tr { --mtax-level: 0; }
+.wp-list-table.mtax-collapsible tbody tr.level-1 { --mtax-level: 1; }
+.wp-list-table.mtax-collapsible tbody tr.level-2 { --mtax-level: 2; }
+.wp-list-table.mtax-collapsible tbody tr.level-3 { --mtax-level: 3; }
+.wp-list-table.mtax-collapsible tbody tr.level-4 { --mtax-level: 4; }
+.wp-list-table.mtax-collapsible tbody tr.level-5 { --mtax-level: 5; }
+.wp-list-table.mtax-collapsible tbody tr.level-6 { --mtax-level: 6; }
+.wp-list-table.mtax-collapsible tbody tr.level-7 { --mtax-level: 7; }
+.wp-list-table.mtax-collapsible tbody tr.level-8 { --mtax-level: 8; }
+.wp-list-table.mtax-collapsible tbody tr.level-9 { --mtax-level: 9; }
+.wp-list-table.mtax-collapsible tbody tr.level-10 { --mtax-level: 10; }
+
+.wp-list-table.mtax-collapsible tbody .column-name {
+    position: relative;
+    padding-left: calc(10px + var(--mtax-arrow) + var(--mtax-level) * var(--mtax-arrow));
+}
+
+.wp-list-table.mtax-collapsible tbody tr:not(.level-0) .column-name {
+    /* Where this row's parent draws its vertical. */
+    --mtax-branch: calc(10px + var(--mtax-arrow) / 2 + (var(--mtax-level) - 1) * var(--mtax-arrow));
+    --mtax-tee: calc(var(--mtax-arrow) / 2); /* far enough to meet this row's arrow */
+    --mtax-drop: 100%; /* the branch carries on to the row below */
+
+    background-image:
+        linear-gradient(var(--mtax-guide), var(--mtax-guide)),
+        linear-gradient(var(--mtax-guide), var(--mtax-guide)),
+        repeating-linear-gradient(to right, var(--mtax-guide) 0 1px, transparent 1px var(--mtax-arrow));
+    background-position:
+        var(--mtax-branch) var(--mtax-mid),
+        var(--mtax-branch) 0,
+        calc(10px + var(--mtax-arrow) / 2) 0;
+    background-size:
+        var(--mtax-tee) 1px,
+        1px var(--mtax-drop),
+        calc((var(--mtax-level) - 1) * var(--mtax-arrow)) 100%;
+    background-repeat: no-repeat;
+}
+
+/* Nothing follows it in its group, so the branch ends at the tee instead of running past it. */
+.wp-list-table.mtax-collapsible tbody tr.mtax-last .column-name {
+    --mtax-drop: calc(var(--mtax-mid) + 1px);
+}
+
+/* No arrow of its own, so the tee runs on to where that arrow would have been. */
+.wp-list-table.mtax-collapsible tbody tr:not(.has-children) .column-name {
+    --mtax-tee: var(--mtax-arrow);
+}
+
+/* Clicking the row folds it, so the whole row advertises that. */
+.wp-list-table.mtax-collapsible tbody tr.has-children {
+    cursor: pointer;
+}
+
+.wp-list-table.mtax-collapsible .mtax-term-toggle {
+    position: absolute;
+    left: calc(10px + var(--mtax-level) * var(--mtax-arrow));
+    top: 8px; /* the cell's own padding-top, so the arrow meets the first line */
+    width: var(--mtax-arrow);
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: #787c82;
+    cursor: pointer;
+}
+
+.wp-list-table.mtax-collapsible .mtax-term-toggle:hover {
+    background: rgba(0, 0, 0, .07);
+}
+
+.wp-list-table.mtax-collapsible .mtax-term-toggle:focus-visible {
+    outline: 1px solid #2271b1;
+}
+
+.wp-list-table.mtax-collapsible .mtax-term-toggle:before {
+    content: "\f345"; /* dashicons-arrow-right-alt2 */
+    font: normal 20px/1 dashicons;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.wp-list-table.mtax-collapsible .mtax-term-toggle[aria-expanded="true"]:before {
+    content: "\f347"; /* dashicons-arrow-down-alt2 */
+}
+
+/* The table is not `fixed` here, so the name column can be squeezed until the row actions wrap.
+   Keep "Edit | Delete" on one line instead. */
+.wp-list-table.mtax-collapsible .row-actions {
+    white-space: nowrap;
+}

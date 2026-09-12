@@ -546,6 +546,9 @@ class Multitaxo_Plugin {
 		wp_register_script( 'admin-multisite-tags', MULTITAXO_PLUGIN_URL . '/assets/js/admin-multisite-tags.js', array( 'jquery', 'common' ), self::asset_version( 'assets/js/admin-multisite-tags.js' ), true );
 
 		wp_register_script( 'inline-edit-multisite-tax', MULTITAXO_PLUGIN_URL . '/assets/js/inline-edit-multisite-tax.js', array( 'jquery', 'wp-a11y' ), self::asset_version( 'assets/js/inline-edit-multisite-tax.js' ), true );
+
+		// Reads the row classes Multisite_Terms_List_Table prints; no dependencies of its own.
+		wp_register_script( 'collapsible-multisite-terms', MULTITAXO_PLUGIN_URL . '/assets/js/collapsible-multisite-terms.js', array(), self::asset_version( 'assets/js/collapsible-multisite-terms.js' ), true );
 		wp_localize_script(
 			'inline-edit-multisite-tax',
 			'inlineEditL10n',
@@ -1194,19 +1197,16 @@ class Multitaxo_Plugin {
 			$this->send_invalid_taxonomy_ajax_error( $taxonomy );
 		}
 
-		$level     = 0;
-		$noparents = ''; // Only hierarchical taxonomies render a "no parents" row; keep compact() below defined.
-
-		if ( is_multisite_taxonomy_hierarchical( $taxonomy ) ) {
-			$level = count( get_ancestors( $tag->term_id, $taxonomy, 'taxonomy' ) );
-			ob_start();
-			$tax_list_table->single_row( $tag, $level );
-			$noparents = ob_get_clean();
-		}
-
+		/*
+		 * One rendering serves both: single_row() works out the term's own depth, so there is no
+		 * longer a "with parents" and a "without parents" variant to choose between.
+		 */
 		ob_start();
 		$tax_list_table->single_row( $tag );
-		$parents = ob_get_clean();
+		$row = ob_get_clean();
+
+		$parents   = $row;
+		$noparents = is_multisite_taxonomy_hierarchical( $taxonomy ) ? $row : '';
 
 		$x->add(
 			array(
@@ -1217,7 +1217,8 @@ class Multitaxo_Plugin {
 		$x->add(
 			array(
 				'what'         => 'term',
-				'position'     => $level,
+				// Where the row goes is the rendered listing's business; nothing reads this.
+				'position'     => 0,
 				'supplemental' => (array) $tag,
 			)
 		);
@@ -1345,14 +1346,7 @@ class Multitaxo_Plugin {
 			}
 			wp_die( esc_html__( 'Item not updated.', 'multitaxo' ) );
 		}
-		$level  = 0;
-		$parent = $tag->parent;
-		while ( $parent > 0 ) {
-			$parent_tag = get_multisite_term( $parent, $taxonomy );
-			$parent     = $parent_tag->parent;
-			++$level;
-		}
-		$tax_list_table->single_row( $tag, $level );
+		$tax_list_table->single_row( $tag );
 		wp_die();
 	}
 
@@ -1623,8 +1617,10 @@ class Multitaxo_Plugin {
 			wp_enqueue_script( 'inline-edit-multisite-tax' );
 		}
 
-		// Shared with the meta box; this screen wants it for the badges in the name column.
+		// Shared with the meta box; this screen wants it for the badges in the name column and for
+		// the collapsible tree.
 		wp_enqueue_style( 'multisite-taxonomy-admin', MULTITAXO_ASSETS_URL . '/css/admin.css', array(), self::asset_version( 'assets/css/admin.css' ) );
+		wp_enqueue_script( 'collapsible-multisite-terms' );
 		?>
 
 		<div class="wrap nosubsub">

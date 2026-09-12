@@ -471,6 +471,28 @@ by object ID means nothing without one. Anything writing that cache by hand has 
 that fills a group must run in the same scope the group names: priming the user group from a
 relationship read that never named the user namespace is how post terms end up cached as a user's.
 
+The network term list renders a hierarchical taxonomy as a collapsible tree, and all of it is
+decided in PHP. `Multisite_Terms_List_Table` walks the taxonomy whole, cuts the page out of the
+walk, and marks each row from the rows around it: a `level-N` class for its depth, a disclosure
+button when the row below it is deeper, and the `hidden` attribute when the row that would unfold
+it is above it and folded. `assets/js/collapsible-multisite-terms.js` does nothing but flip
+`hidden`; `assets/css/admin.css` turns the same `level-N` into the indent and the guide lines. The
+table also drops the `fixed` and `striped` classes — a tree can use neither, and `:nth-child`
+striping counts the folded-away rows. A search or a sorted column has no tree in it, so the query
+pages those itself and every match is listed in its own right.
+
+Cutting the page after the walk is what lets a row be told what follows it. A subtree split across
+pages leaves a parent with nothing here to open, and it gets no button. A page starting inside a
+subtree prints that subtree's parents for context, and those stay open down to the term the page is
+for, or the page would arrive blank. A row rendered on its own over ajax — a term just added, a row
+back from Quick Edit — is never hidden, because it lands in a page that is already open, and takes
+its depth from the term's own ancestry instead.
+
+`tests/test-terms-list-table.php` holds that markup in place. Depth used to be reverse-engineered
+in JavaScript from the em-dash padding in the rendered term name — display text, filtered through
+`multisite_term_name` — which is also why that padding is gone: the indent says the same thing
+without putting it in the name.
+
 ## Logging
 
 The plugin logs the few things a developer must see (a repaired schema, a failed write) through the
